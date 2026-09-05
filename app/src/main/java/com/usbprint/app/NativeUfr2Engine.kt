@@ -37,14 +37,22 @@ class NativeUfr2Engine : Ufr2Engine {
                 message = "Native UFR II LT engine currently accepts one raster page at a time"
             )
 
-        return encodeNative(
-            page.data,
-            page.width,
-            page.height,
-            job.dpi,
-            job.paperWidthMm,
-            job.paperHeightMm
-        )
+        return runCatching {
+            encodeNative(
+                page.data,
+                page.width,
+                page.height,
+                job.dpi,
+                job.paperWidthMm,
+                job.paperHeightMm
+            )
+        }.getOrElse { error ->
+            Ufr2Encoder.Result(
+                success = false,
+                data = null,
+                message = "Native UFR II LT encoder failed safely: ${error.javaClass.simpleName}"
+            )
+        }
     }
 
     private external fun encodeNative(
