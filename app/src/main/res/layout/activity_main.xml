@@ -14,23 +14,8 @@
         android:paddingStart="20dp"
         android:paddingEnd="20dp"
         android:background="#17181D">
-
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="USB Print"
-            android:textColor="#FFFFFF"
-            android:textSize="21sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="AD-FREE"
-            android:textColor="#BFC5FF"
-            android:textSize="11sp"
-            android:textStyle="bold" />
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="USB Print" android:textColor="#FFFFFF" android:textSize="21sp" android:textStyle="bold" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="AD-FREE" android:textColor="#BFC5FF" android:textSize="11sp" android:textStyle="bold" />
     </LinearLayout>
 
     <ScrollView
@@ -39,7 +24,6 @@
         android:layout_weight="1"
         android:fillViewport="true"
         android:clipToPadding="false">
-
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -49,125 +33,32 @@
             android:paddingEnd="20dp"
             android:paddingBottom="24dp">
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Print directly from your phone"
-                android:textColor="#202124"
-                android:textSize="24sp"
-                android:textStyle="bold" />
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Print directly from your phone" android:textColor="#202124" android:textSize="24sp" android:textStyle="bold" />
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="Connect a Canon printer with USB OTG and print without ads or subscriptions." android:textColor="#666872" android:textSize="15sp" android:lineSpacingExtra="2dp" />
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="Connect a Canon printer with USB OTG and print without ads or subscriptions."
-                android:textColor="#666872"
-                android:textSize="15sp"
-                android:lineSpacingExtra="2dp" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:orientation="vertical"
-                android:padding="18dp"
-                android:background="@drawable/bg_card">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="PRINTER CONNECTION"
-                    android:textColor="#5963A8"
-                    android:textSize="11sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/statusText"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
-                    android:text="Checking USB devices..."
-                    android:textColor="#202124"
-                    android:textSize="19sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/deviceText"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="Connect your Canon printer using a USB OTG adapter, then tap Refresh."
-                    android:textColor="#6B6D76"
-                    android:textIsSelectable="true"
-                    android:textSize="14sp"
-                    android:lineSpacingExtra="2dp" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:orientation="vertical" android:padding="18dp" android:background="@drawable/bg_card">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="PRINTER CONNECTION" android:textColor="#5963A8" android:textSize="11sp" android:textStyle="bold" />
+                <TextView android:id="@+id/statusText" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="Checking USB devices..." android:textColor="#202124" android:textSize="19sp" android:textStyle="bold" />
+                <TextView android:id="@+id/deviceText" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="Connect your Canon printer using a USB OTG adapter, then tap Refresh." android:textColor="#6B6D76" android:textIsSelectable="true" android:textSize="14sp" android:lineSpacingExtra="2dp" />
             </LinearLayout>
 
-            <Button
-                android:id="@+id/refreshButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:background="@drawable/bg_primary_button"
-                android:minHeight="50dp"
-                android:text="Refresh USB Devices"
-                android:textAllCaps="false"
-                android:textColor="#FFFFFF"
-                android:textSize="16sp"
-                android:textStyle="bold" />
+            <Button android:id="@+id/refreshButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:background="@drawable/bg_primary_button" android:minHeight="50dp" android:text="Refresh USB Devices" android:textAllCaps="false" android:textColor="#FFFFFF" android:textSize="16sp" android:textStyle="bold" />
+            <Button android:id="@+id/connectButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:background="@drawable/bg_secondary_button" android:enabled="false" android:minHeight="50dp" android:text="Connect to Printer" android:textAllCaps="false" android:textColor="#22242A" android:textSize="16sp" android:textStyle="bold" />
 
-            <Button
-                android:id="@+id/connectButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/bg_secondary_button"
-                android:enabled="false"
-                android:minHeight="50dp"
-                android:text="Connect to Printer"
-                android:textAllCaps="false"
-                android:textColor="#22242A"
-                android:textSize="16sp"
-                android:textStyle="bold" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:orientation="vertical"
-                android:padding="18dp"
-                android:background="@drawable/bg_card">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="CURRENT STATUS"
-                    android:textColor="#5963A8"
-                    android:textSize="11sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/connectionText"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="7dp"
-                    android:text="Not connected"
-                    android:textColor="#202124"
-                    android:textSize="16sp"
-                    android:textStyle="bold"
-                    android:textIsSelectable="true" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:orientation="vertical" android:padding="18dp" android:background="@drawable/bg_card">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="DOCUMENT" android:textColor="#5963A8" android:textSize="11sp" android:textStyle="bold" />
+                <TextView android:id="@+id/documentText" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="7dp" android:text="No document selected" android:textColor="#202124" android:textSize="16sp" android:textStyle="bold" />
+                <Button android:id="@+id/selectDocumentButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:background="@drawable/bg_secondary_button" android:minHeight="48dp" android:text="Select PDF" android:textAllCaps="false" android:textColor="#22242A" android:textSize="15sp" android:textStyle="bold" />
             </LinearLayout>
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="20dp"
-                android:gravity="center"
-                android:text="USB OTG  •  Canon  •  Simple printing"
-                android:textColor="#92949C"
-                android:textSize="12sp" />
+            <Button android:id="@+id/printButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:background="@drawable/bg_primary_button" android:enabled="false" android:minHeight="52dp" android:text="Print Document" android:textAllCaps="false" android:textColor="#FFFFFF" android:textSize="16sp" android:textStyle="bold" />
 
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:orientation="vertical" android:padding="18dp" android:background="@drawable/bg_card">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="CURRENT STATUS" android:textColor="#5963A8" android:textSize="11sp" android:textStyle="bold" />
+                <TextView android:id="@+id/connectionText" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="7dp" android:text="Not connected" android:textColor="#202124" android:textSize="16sp" android:textStyle="bold" android:textIsSelectable="true" />
+            </LinearLayout>
+
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="20dp" android:gravity="center" android:text="USB OTG  •  Canon  •  Simple printing" android:textColor="#92949C" android:textSize="12sp" />
         </LinearLayout>
     </ScrollView>
 </LinearLayout>
