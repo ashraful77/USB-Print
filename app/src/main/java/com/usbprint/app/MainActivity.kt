@@ -21,8 +21,10 @@ class MainActivity : Activity() {
     }
 
     private lateinit var usbManager: UsbManager
+    private lateinit var usbConnection: UsbPrinterConnection
     private lateinit var statusText: TextView
     private lateinit var deviceText: TextView
+    private lateinit var connectionText: TextView
     private lateinit var refreshButton: Button
     private lateinit var connectButton: Button
 
@@ -31,12 +33,13 @@ class MainActivity : Activity() {
     private val usbPermissionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action != ACTION_USB_PERMISSION) return
-
             val device = getUsbDeviceFromIntent(intent) ?: return
+
             if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
                 selectedDevice = device
                 statusText.text = "USB permission granted ✓"
                 deviceText.text = deviceDetails(device)
+                connectToPrinter()
             } else {
                 statusText.text = "USB permission was denied."
             }
@@ -48,20 +51,21 @@ class MainActivity : Activity() {
         setContentView(R.layout.activity_main)
 
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
+        usbConnection = UsbPrinterConnection(usbManager)
         statusText = findViewById(R.id.statusText)
         deviceText = findViewById(R.id.deviceText)
+        connectionText = findViewById(R.id.connectionText)
         refreshButton = findViewById(R.id.refreshButton)
         connectButton = findViewById(R.id.connectButton)
 
         registerUsbPermissionReceiver()
-
         refreshButton.setOnClickListener { scanUsbDevices() }
         connectButton.setOnClickListener { requestUsbPermission() }
-
         scanUsbDevices()
     }
 
     override fun onDestroy() {
+        usbConnection.close()
         unregisterReceiver(usbPermissionReceiver)
         super.onDestroy()
     }
@@ -69,6 +73,8 @@ class MainActivity : Activity() {
     private fun scanUsbDevices() {
         val devices = usbManager.deviceList.values.toList()
         selectedDevice = devices.firstOrNull { isPrinterLike(it) } ?: devices.firstOrNull()
+        usbConnection.close()
+        connectionText.text = "Not connected"
 
         if (devices.isEmpty()) {
             statusText.text = "No USB device detected"
@@ -83,14 +89,13 @@ class MainActivity : Activity() {
     }
 
     private fun requestUsbPermission() {
-        val device = selectedDevice
-        if (device == null) {
+        val device = selectedDevice ?: run {
             statusText.text = "No USB device selected."
             return
         }
 
         if (usbManager.hasPermission(device)) {
-            statusText.text = "USB permission already granted ✓"
+            connectToPrinter()
             return
         }
 
@@ -103,9 +108,25 @@ class MainActivity : Activity() {
             Intent(ACTION_USB_PERMISSION).setPackage(packageName),
             flags
         )
-
         usbManager.requestPermission(device, permissionIntent)
         statusText.text = "Waiting for USB permission..."
+    }
+
+    private fun connectToPrinter() {
+        val device = selectedDevice ?: return
+        val result = usbConnection.open(device)
+        statusText.text = result.message
+        connectionText.text = if (result.success) {
+            buildString {
+                append("Connected ✓")
+                result.interfaceNumber?.let { append("\nInterface: ").append(it) }
+                if (result.endpointSummary.isNotBlank()) {
+                    append("\n").append(result.endpointSummary)
+                }
+            }
+        } else {
+            "Not connected"
+        }
     }
 
     private fun isPrinterLike(device: UsbDevice): Boolean {
