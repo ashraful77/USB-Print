@@ -16,19 +16,22 @@ The app can:
 - Verify USB Printer Class communication with `GET_PORT_STATUS`
 - Select a PDF using Android's document picker
 - Render PDF pages into packed 1-bit monochrome raster data
+- Recognize the observed Canon LBP6030B USB profile (`04A9:2795`)
 
 ## Target printer
 
-Initial testing target: Canon USB printer from the imageCLASS LBP6030 family.
+Initial testing target: Canon imageCLASS LBP6030B / LBP6030 family.
+
+Canon's Linux UFRII LT driver documentation identifies this family as UFRII LT. The model-specific profile in this project records the observed USB ID and the A4/600-dpi defaults needed by the print pipeline.
 
 ## Print architecture
 
-The target printer uses Canon UFR II LT. PDF bytes or generic raster bytes must not be sent directly to the printer. The application therefore separates PDF rendering from the printer protocol:
-
 `PDF -> monochrome raster -> UFR II LT encoder -> USB bulk transfer -> printer`
 
-The UFR II LT encoder is the remaining component before a physical test page can be sent. The project does not bundle Canon's proprietary driver binaries.
+The UFR II LT encoder is still the remaining component before a physical test page can be sent. The project does not bundle Canon's proprietary driver binaries.
+
+Open-source research shows that Canon's Linux driver family has separate SFP/LT components and that some UFR II LT components are GPL-licensed, while other driver components remain proprietary. We therefore keep the Android implementation modular and only integrate code whose license permits redistribution.
 
 ## Next milestone
 
-Implement and validate the UFR II LT encoder for the LBP6030 family, then send a controlled one-page test job over the already-working USB connection.
+Implement the verified UFR II LT/SFP encoding path for the LBP6030B, validate its page framing and raster compression, then send a controlled one-page test job over the already-working USB connection.
