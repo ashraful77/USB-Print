@@ -80,6 +80,8 @@ class MainActivity : Activity() {
         connectButton.setOnClickListener { requestUsbPermission() }
         testPrinterButton.setOnClickListener { testPrinterConnection() }
         selectDocumentButton.setOnClickListener { selectPdf() }
+        // Keep Print disabled until a verified UFR II LT encoder is integrated.
+        printButton.isEnabled = false
         printButton.setOnClickListener {
             statusText.text = "UFR II LT print engine is not installed yet"
             connectionText.text = "USB connection is ready ✓\nPDF printing will be enabled after the Canon UFR II LT engine is integrated."
@@ -124,8 +126,14 @@ class MainActivity : Activity() {
             // Some document providers do not offer persistable permissions.
         }
         documentText.text = getDocumentName(uri)
-        printButton.isEnabled = usbConnection.isOpen && selectedDocumentUri != null
+        // Selection alone must not enable Print: the UFR II LT encoder is not ready.
+        printButton.isEnabled = false
         statusText.text = "PDF selected ✓"
+        connectionText.text = if (usbConnection.isOpen) {
+            "USB connection is ready ✓\nPDF selected. UFR II LT print engine is not integrated yet."
+        } else {
+            "Not connected\nPDF selected. Connect the printer and verify USB communication."
+        }
     }
 
     private fun getDocumentName(uri: Uri): String {
@@ -205,10 +213,11 @@ class MainActivity : Activity() {
                 append("Connected ✓")
                 result.interfaceNumber?.let { append("\nInterface: ").append(it) }
                 if (result.endpointSummary.isNotBlank()) append("\n").append(result.endpointSummary)
+                append("\nUFR II LT engine is not integrated yet.")
             }
         } else "Not connected"
         testPrinterButton.isEnabled = result.success
-        printButton.isEnabled = result.success && selectedDocumentUri != null
+        printButton.isEnabled = false
     }
 
     private fun isPrinterLike(device: UsbDevice): Boolean {
