@@ -7,12 +7,12 @@ package com.usbprint.app
  * LBP6030B-compatible implementation is supplied, this class reports that
  * the engine is unavailable and never sends data to the printer.
  */
-class NativeUfr2Engine {
+class NativeUfr2Engine : Ufr2Engine {
 
-    val isAvailable: Boolean
+    override val isAvailable: Boolean
         get() = nativeLoaded
 
-    fun encode(job: Ufr2Encoder.Job): Ufr2Encoder.Result {
+    override fun encode(job: Ufr2Encoder.Job): Ufr2Encoder.Result {
         require(job.pages.isNotEmpty()) { "At least one page is required" }
         require(job.pages.size == 1) {
             "Native UFR II LT engine currently accepts one raster page at a time"
