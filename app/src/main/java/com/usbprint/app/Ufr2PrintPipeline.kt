@@ -7,8 +7,7 @@ import android.net.Uri
  *
  * The pipeline is intentionally usable before the real SFP encoder exists: it
  * validates the raster job, asks the UFR II LT engine to encode it, and only then
- * transfers the returned printer bytes. A failed/unavailable encoder therefore
- * cannot accidentally print raw PDF or raster data.
+ * converts the successful result into the type-safe USB transfer object.
  */
 class Ufr2PrintPipeline(
     private val rasterizer: PdfRasterizer,
@@ -43,11 +42,10 @@ class Ufr2PrintPipeline(
         }
 
         val encoded = engine.encode(job)
-        if (!encoded.success || encoded.data == null || encoded.data.isEmpty()) {
-            return Result(false, encoded.message)
-        }
+        val encodedJob = EncodedSfpJob.fromEncoderResult(encoded)
+            ?: return Result(false, encoded.message)
 
-        val transfer = usbConnection.sendEncodedJob(encoded.data)
+        val transfer = usbConnection.sendEncodedJob(encodedJob)
         return Result(transfer.success, transfer.message)
     }
 
