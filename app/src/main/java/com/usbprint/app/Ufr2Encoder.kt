@@ -13,12 +13,6 @@ package com.usbprint.app
 class Ufr2Encoder(
     private val profile: Ufr2PrinterProfile = Ufr2PrinterProfile.LBP6030B
 ) {
-
-    /**
-     * A print job carries its resolved printer settings explicitly.
-     * Defaults are resolved from the encoder profile by [newJob], because a
-     * nested data class cannot safely reference the outer encoder instance.
-     */
     data class Job(
         val pages: List<PdfRasterizer.RasterPage>,
         val dpi: Int,
@@ -31,12 +25,7 @@ class Ufr2Encoder(
         dpi: Int = profile.defaultDpi,
         paperWidthMm: Int = profile.paperWidthMm,
         paperHeightMm: Int = profile.paperHeightMm
-    ): Job = Job(
-        pages = pages,
-        dpi = dpi,
-        paperWidthMm = paperWidthMm,
-        paperHeightMm = paperHeightMm
-    )
+    ): Job = Job(pages, dpi, paperWidthMm, paperHeightMm)
 
     fun encode(job: Job): Result {
         require(job.pages.isNotEmpty()) { "At least one page is required" }
@@ -45,9 +34,7 @@ class Ufr2Encoder(
         require(job.paperHeightMm > 0) { "Paper height must be positive" }
 
         for (page in job.pages) {
-            require(page.width > 0 && page.height > 0) {
-                "Raster page dimensions must be positive"
-            }
+            require(page.width > 0 && page.height > 0) { "Raster page dimensions must be positive" }
             require(page.bytesPerRow == (page.width + 7) / 8) {
                 "Raster bytesPerRow does not match page width"
             }
