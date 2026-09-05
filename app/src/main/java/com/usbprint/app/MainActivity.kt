@@ -6,12 +6,16 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Color
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
+import android.view.View
+import android.view.WindowInsets
 import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
 
 class MainActivity : Activity() {
@@ -49,6 +53,8 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        configureSystemBars()
+        configureSafeScreenInsets()
 
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
         usbConnection = UsbPrinterConnection(usbManager)
@@ -62,6 +68,41 @@ class MainActivity : Activity() {
         refreshButton.setOnClickListener { scanUsbDevices() }
         connectButton.setOnClickListener { requestUsbPermission() }
         scanUsbDevices()
+    }
+
+    private fun configureSystemBars() {
+        window.statusBarColor = Color.rgb(23, 24, 29)
+        window.navigationBarColor = Color.rgb(247, 247, 251)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        }
+    }
+
+    private fun configureSafeScreenInsets() {
+        val root = findViewById<LinearLayout>(R.id.rootLayout)
+        val toolbar = findViewById<LinearLayout>(R.id.toolbar)
+        val originalToolbarTop = toolbar.paddingTop
+        val originalToolbarBottom = toolbar.paddingBottom
+        val originalRootLeft = root.paddingLeft
+        val originalRootRight = root.paddingRight
+
+        root.setOnApplyWindowInsetsListener { view, insets ->
+            val bars = insets.getInsets(WindowInsets.Type.systemBars())
+            view.setPadding(
+                maxOf(originalRootLeft, bars.left),
+                0,
+                maxOf(originalRootRight, bars.right),
+                bars.bottom
+            )
+            toolbar.setPadding(
+                toolbar.paddingLeft,
+                originalToolbarTop + bars.top,
+                toolbar.paddingRight,
+                originalToolbarBottom
+            )
+            insets
+        }
+        root.requestApplyInsets()
     }
 
     override fun onDestroy() {
