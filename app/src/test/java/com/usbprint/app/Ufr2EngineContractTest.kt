@@ -16,13 +16,7 @@ class Ufr2EngineContractTest {
 
     @Test
     fun unavailableNativeEngineNeverProducesPrinterBytes() {
-        val page = PdfRasterizer.RasterPage(
-            pageNumber = 0,
-            width = 8,
-            height = 1,
-            bytesPerRow = 1,
-            data = byteArrayOf(0)
-        )
+        val page = rasterPage()
         val job = Ufr2Encoder().newJob(listOf(page))
         val engine = NativeUfr2Engine()
 
@@ -33,4 +27,29 @@ class Ufr2EngineContractTest {
             assertNull(result.data)
         }
     }
+
+    @Test
+    fun nativeEngineRejectsInvalidSfpJobBeforeEncoding() {
+        val page = rasterPage()
+        val invalidJob = Ufr2Encoder.Job(
+            pages = listOf(page),
+            dpi = 300,
+            paperWidthMm = 210,
+            paperHeightMm = 297
+        )
+        val result = NativeUfr2Engine().encode(invalidJob)
+
+        assertFalse(result.success)
+        assertNull(result.data)
+        assertTrue(result.message.contains("600 DPI"))
+    }
+
+    private fun rasterPage(): PdfRasterizer.RasterPage =
+        PdfRasterizer.RasterPage(
+            pageNumber = 0,
+            width = 8,
+            height = 1,
+            bytesPerRow = 1,
+            data = byteArrayOf(0)
+        )
 }
