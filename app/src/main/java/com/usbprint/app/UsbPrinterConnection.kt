@@ -9,6 +9,8 @@ import android.hardware.usb.UsbManager
 
 class UsbPrinterConnection(private val usbManager: UsbManager) {
     data class Result(val success: Boolean, val message: String, val interfaceNumber: Int? = null, val endpointSummary: String = "")
+    data class CommunicationResult(val success: Boolean, val message: String)
+
     private var connection: UsbDeviceConnection? = null
     private var printerInterface: UsbInterface? = null
     private var outEndpoint: UsbEndpoint? = null
@@ -44,6 +46,43 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
             })
         }
         return Result(false, "No USB printer interface with a bulk OUT endpoint was found.")
+    }
+
+    /**
+     * Performs a USB Printer Class GET_PORT_STATUS request.
+     * This does not send a print job; it verifies that Android can communicate
+     * with the claimed printer interface before we attempt UFR II LT printing.
+     */
+    fun testCommunication(): CommunicationResult {
+        val currentConnection = connection ?: return CommunicationResult(false, "Printer is not connected.")
+        val currentInterface = printerInterface ?: return CommunicationResult(false, "Printer interface is not available.")
+        val buffer = ByteArray(1)
+        val transferred = currentConnection.controlTransfer(
+            0xA1,
+            0x01,
+            0,
+            currentInterface.id,
+            buffer,
+            buffer.size,
+            1500
+        )
+        if (transferred == 1) {
+            val status = buffer[0].toInt() and 0xFF
+            val selected = (status and 0x01) != 0
+            val noError = (status and 0x08) != 0
+            val paperEmpty = (status and 0x20) != 0
+            return CommunicationResult(
+                true,
+                buildString {
+                    append("Printer responded ✓")
+                    append("\nUSB status: 0x").append(status.toString(16).padStart(2, '0').uppercase())
+                    if (selected) append("\nPrinter selected")
+                    if (noError) append("\nNo printer error reported")
+                    if (paperEmpty) append("\nPaper-out status reported")
+                }
+            )
+        }
+        return CommunicationResult(false, "Printer did not respond to the USB Printer Class status request.")
     }
 
     fun close() {
