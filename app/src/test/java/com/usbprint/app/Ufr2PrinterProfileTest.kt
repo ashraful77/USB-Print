@@ -7,11 +7,12 @@ import org.junit.Test
 class Ufr2PrinterProfileTest {
 
     @Test
-    fun identifiesObservedLbp6030bUsbId() {
+    fun identifiesObservedLbp6030FamilyUsbId() {
         val profile = Ufr2PrinterProfile.fromUsbIds(0x04A9, 0x2795)
 
         requireNotNull(profile)
-        assertEquals("Canon imageCLASS LBP6030B", profile.name)
+        assertEquals("Canon LBP6030/6040/6018L", profile.name)
+        assertEquals("Canon LBP6030/6040/6018L", profile.usbProductName)
         assertEquals(600, profile.defaultDpi)
         assertEquals(210, profile.paperWidthMm)
         assertEquals(297, profile.paperHeightMm)
