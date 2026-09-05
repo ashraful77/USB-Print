@@ -14,11 +14,28 @@ class Ufr2Encoder(
     private val profile: Ufr2PrinterProfile = Ufr2PrinterProfile.LBP6030B
 ) {
 
+    /**
+     * A print job carries its resolved printer settings explicitly.
+     * Defaults are resolved from the encoder profile by [newJob], because a
+     * nested data class cannot safely reference the outer encoder instance.
+     */
     data class Job(
         val pages: List<PdfRasterizer.RasterPage>,
-        val dpi: Int = profile.defaultDpi,
-        val paperWidthMm: Int = profile.paperWidthMm,
-        val paperHeightMm: Int = profile.paperHeightMm
+        val dpi: Int,
+        val paperWidthMm: Int,
+        val paperHeightMm: Int
+    )
+
+    fun newJob(
+        pages: List<PdfRasterizer.RasterPage>,
+        dpi: Int = profile.defaultDpi,
+        paperWidthMm: Int = profile.paperWidthMm,
+        paperHeightMm: Int = profile.paperHeightMm
+    ): Job = Job(
+        pages = pages,
+        dpi = dpi,
+        paperWidthMm = paperWidthMm,
+        paperHeightMm = paperHeightMm
     )
 
     fun encode(job: Job): Result {
