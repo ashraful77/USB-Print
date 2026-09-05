@@ -13,8 +13,13 @@ data class Ufr2PrinterProfile(
     val productId: Int,
     val defaultDpi: Int,
     val paperWidthMm: Int,
-    val paperHeightMm: Int
+    val paperHeightMm: Int,
+    val driverFamily: DriverFamily
 ) {
+    enum class DriverFamily {
+        SFP
+    }
+
     companion object {
         /** Canon LBP6030B USB ID observed by the app. */
         val LBP6030B = Ufr2PrinterProfile(
@@ -23,7 +28,8 @@ data class Ufr2PrinterProfile(
             productId = 0x2795,
             defaultDpi = 600,
             paperWidthMm = 210,
-            paperHeightMm = 297
+            paperHeightMm = 297,
+            driverFamily = DriverFamily.SFP
         )
 
         fun fromUsbIds(vendorId: Int, productId: Int): Ufr2PrinterProfile? =
