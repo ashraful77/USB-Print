@@ -13,9 +13,13 @@ class NativeUfr2Engine : Ufr2Engine {
         get() = nativeLoaded
 
     override fun encode(job: Ufr2Encoder.Job): Ufr2Encoder.Result {
-        require(job.pages.isNotEmpty()) { "At least one page is required" }
-        require(job.pages.size == 1) {
-            "Native UFR II LT engine currently accepts one raster page at a time"
+        val validation = SfpJobValidator.validate(job)
+        if (!validation.valid) {
+            return Ufr2Encoder.Result(
+                success = false,
+                data = null,
+                message = validation.message
+            )
         }
 
         if (!nativeLoaded) {
@@ -26,7 +30,13 @@ class NativeUfr2Engine : Ufr2Engine {
             )
         }
 
-        val page = job.pages.single()
+        val page = job.pages.singleOrNull()
+            ?: return Ufr2Encoder.Result(
+                success = false,
+                data = null,
+                message = "Native UFR II LT engine currently accepts one raster page at a time"
+            )
+
         return encodeNative(
             page.data,
             page.width,
