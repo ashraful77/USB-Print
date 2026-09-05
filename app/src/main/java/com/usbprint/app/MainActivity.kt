@@ -35,6 +35,7 @@ class MainActivity : Activity() {
     private lateinit var documentText: TextView
     private lateinit var refreshButton: Button
     private lateinit var connectButton: Button
+    private lateinit var testPrinterButton: Button
     private lateinit var selectDocumentButton: Button
     private lateinit var printButton: Button
 
@@ -70,18 +71,37 @@ class MainActivity : Activity() {
         documentText = findViewById(R.id.documentText)
         refreshButton = findViewById(R.id.refreshButton)
         connectButton = findViewById(R.id.connectButton)
+        testPrinterButton = findViewById(R.id.testPrinterButton)
         selectDocumentButton = findViewById(R.id.selectDocumentButton)
         printButton = findViewById(R.id.printButton)
 
         registerUsbPermissionReceiver()
         refreshButton.setOnClickListener { scanUsbDevices() }
         connectButton.setOnClickListener { requestUsbPermission() }
+        testPrinterButton.setOnClickListener { testPrinterConnection() }
         selectDocumentButton.setOnClickListener { selectPdf() }
         printButton.setOnClickListener {
-            statusText.text = "Document ready for printing"
-            connectionText.text = "Connected ✓\nPrint engine will be added next."
+            statusText.text = "UFR II LT print engine is not installed yet"
+            connectionText.text = "USB connection is ready ✓\nPDF printing will be enabled after the Canon UFR II LT engine is integrated."
         }
         scanUsbDevices()
+    }
+
+    private fun testPrinterConnection() {
+        if (!usbConnection.isOpen) {
+            statusText.text = "Connect to the printer first."
+            return
+        }
+        testPrinterButton.isEnabled = false
+        statusText.text = "Testing printer USB communication..."
+        Thread {
+            val result = usbConnection.testCommunication()
+            runOnUiThread {
+                testPrinterButton.isEnabled = usbConnection.isOpen
+                statusText.text = if (result.success) "Printer communication test passed ✓" else "Printer communication test failed"
+                connectionText.text = result.message
+            }
+        }.start()
     }
 
     private fun selectPdf() {
@@ -151,6 +171,7 @@ class MainActivity : Activity() {
         selectedDevice = devices.firstOrNull { isPrinterLike(it) } ?: devices.firstOrNull()
         usbConnection.close()
         connectionText.text = "Not connected"
+        testPrinterButton.isEnabled = false
         printButton.isEnabled = false
         if (devices.isEmpty()) {
             statusText.text = "No USB device detected"
@@ -186,6 +207,7 @@ class MainActivity : Activity() {
                 if (result.endpointSummary.isNotBlank()) append("\n").append(result.endpointSummary)
             }
         } else "Not connected"
+        testPrinterButton.isEnabled = result.success
         printButton.isEnabled = result.success && selectedDocumentUri != null
     }
 
