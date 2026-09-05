@@ -46,7 +46,16 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:enabled="false"
-            android:text="Connect / Request Permission" />
+            android:text="Connect to Printer" />
+
+        <TextView
+            android:id="@+id/connectionText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Not connected"
+            android:textIsSelectable="true"
+            android:textSize="15sp" />
 
     </LinearLayout>
 </ScrollView>
