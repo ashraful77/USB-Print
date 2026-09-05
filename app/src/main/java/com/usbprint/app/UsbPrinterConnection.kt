@@ -10,6 +10,7 @@ import android.hardware.usb.UsbManager
 class UsbPrinterConnection(private val usbManager: UsbManager) {
     data class Result(val success: Boolean, val message: String, val interfaceNumber: Int? = null, val endpointSummary: String = "")
     data class CommunicationResult(val success: Boolean, val message: String)
+    data class PrintTransferResult(val success: Boolean, val message: String, val bytesSent: Int = 0)
 
     private var connection: UsbDeviceConnection? = null
     private var printerInterface: UsbInterface? = null
@@ -85,6 +86,45 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
         return CommunicationResult(false, "Printer did not respond to the USB Printer Class status request.")
     }
 
+    /**
+     * Sends already-encoded printer data over the claimed bulk OUT endpoint.
+     *
+     * This method deliberately accepts only encoded bytes. PDF and generic raster
+     * data must never be passed here; the UFR II LT/SFP encoder owns that step.
+     */
+    fun sendEncodedJob(data: ByteArray, timeoutMs: Int = DEFAULT_TRANSFER_TIMEOUT_MS): PrintTransferResult {
+        val currentConnection = connection
+            ?: return PrintTransferResult(false, "Printer is not connected.")
+        val endpoint = outEndpoint
+            ?: return PrintTransferResult(false, "Printer bulk OUT endpoint is not available.")
+        if (data.isEmpty()) {
+            return PrintTransferResult(false, "Encoded printer job is empty.")
+        }
+        require(timeoutMs > 0) { "USB transfer timeout must be positive" }
+
+        var offset = 0
+        while (offset < data.size) {
+            val chunkSize = minOf(DEFAULT_TRANSFER_CHUNK_BYTES, data.size - offset)
+            val transferred = currentConnection.bulkTransfer(
+                endpoint,
+                data,
+                offset,
+                chunkSize,
+                timeoutMs
+            )
+            if (transferred != chunkSize) {
+                return PrintTransferResult(
+                    false,
+                    "USB print transfer stopped after $offset bytes (expected $chunkSize, sent $transferred).",
+                    offset
+                )
+            }
+            offset += transferred
+        }
+
+        return PrintTransferResult(true, "Encoded printer job sent ✓ ($offset bytes)", offset)
+    }
+
     fun close() {
         val currentConnection = connection
         val currentInterface = printerInterface
@@ -100,4 +140,9 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
         get() = connection != null && outEndpoint != null
 
     private fun formatEndpoint(endpoint: UsbEndpoint): String = "0x${endpoint.address.toString(16).uppercase()} (${endpoint.maxPacketSize} bytes)"
+
+    companion object {
+        private const val DEFAULT_TRANSFER_CHUNK_BYTES = 16 * 1024
+        private const val DEFAULT_TRANSFER_TIMEOUT_MS = 5000
+    }
 }
