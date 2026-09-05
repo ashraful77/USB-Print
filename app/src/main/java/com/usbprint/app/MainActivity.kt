@@ -81,25 +81,36 @@ class MainActivity : Activity() {
     private fun configureSafeScreenInsets() {
         val root = findViewById<LinearLayout>(R.id.rootLayout)
         val toolbar = findViewById<LinearLayout>(R.id.toolbar)
-        val originalToolbarTop = toolbar.paddingTop
+        val baseToolbarHeight = toolbar.layoutParams.height
+        val originalToolbarLeft = toolbar.paddingLeft
+        val originalToolbarRight = toolbar.paddingRight
         val originalToolbarBottom = toolbar.paddingBottom
         val originalRootLeft = root.paddingLeft
         val originalRootRight = root.paddingRight
 
         root.setOnApplyWindowInsetsListener { view, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars())
+
             view.setPadding(
                 maxOf(originalRootLeft, bars.left),
                 0,
                 maxOf(originalRootRight, bars.right),
                 bars.bottom
             )
+
+            // Android can draw the activity behind the status bar on newer versions.
+            // Expand the toolbar instead of squeezing its content, keeping the title fully visible.
+            toolbar.layoutParams = toolbar.layoutParams.apply {
+                height = baseToolbarHeight + bars.top
+            }
             toolbar.setPadding(
-                toolbar.paddingLeft,
-                originalToolbarTop + bars.top,
-                toolbar.paddingRight,
+                originalToolbarLeft,
+                bars.top,
+                originalToolbarRight,
                 originalToolbarBottom
             )
+            toolbar.requestLayout()
+
             insets
         }
         root.requestApplyInsets()
