@@ -13,6 +13,11 @@ class NativeUfr2Engine {
         get() = nativeLoaded
 
     fun encode(job: Ufr2Encoder.Job): Ufr2Encoder.Result {
+        require(job.pages.isNotEmpty()) { "At least one page is required" }
+        require(job.pages.size == 1) {
+            "Native UFR II LT engine currently accepts one raster page at a time"
+        }
+
         if (!nativeLoaded) {
             return Ufr2Encoder.Result(
                 success = false,
@@ -21,10 +26,11 @@ class NativeUfr2Engine {
             )
         }
 
+        val page = job.pages.single()
         return encodeNative(
-            job.pages.first().data,
-            job.pages.first().width,
-            job.pages.first().height,
+            page.data,
+            page.width,
+            page.height,
             job.dpi,
             job.paperWidthMm,
             job.paperHeightMm
