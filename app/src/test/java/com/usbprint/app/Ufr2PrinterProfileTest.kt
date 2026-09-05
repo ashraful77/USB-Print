@@ -15,6 +15,7 @@ class Ufr2PrinterProfileTest {
         assertEquals(600, profile.defaultDpi)
         assertEquals(210, profile.paperWidthMm)
         assertEquals(297, profile.paperHeightMm)
+        assertEquals(Ufr2PrinterProfile.DriverFamily.SFP, profile.driverFamily)
     }
 
     @Test
