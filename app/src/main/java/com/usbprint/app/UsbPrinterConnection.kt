@@ -87,21 +87,17 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
     }
 
     /**
-     * Sends already-encoded printer data over the claimed bulk OUT endpoint.
-     *
-     * This method deliberately accepts only encoded bytes. PDF and generic raster
-     * data must never be passed here; the UFR II LT/SFP encoder owns that step.
+     * Sends only a type-safe, already-encoded SFP/UFR II LT job.
+     * Raw PDF/raster ByteArray values cannot be passed through this API.
      */
-    fun sendEncodedJob(data: ByteArray, timeoutMs: Int = DEFAULT_TRANSFER_TIMEOUT_MS): PrintTransferResult {
+    fun sendEncodedJob(job: EncodedSfpJob, timeoutMs: Int = DEFAULT_TRANSFER_TIMEOUT_MS): PrintTransferResult {
         val currentConnection = connection
             ?: return PrintTransferResult(false, "Printer is not connected.")
         val endpoint = outEndpoint
             ?: return PrintTransferResult(false, "Printer bulk OUT endpoint is not available.")
-        if (data.isEmpty()) {
-            return PrintTransferResult(false, "Encoded printer job is empty.")
-        }
         require(timeoutMs > 0) { "USB transfer timeout must be positive" }
 
+        val data = job.data
         var offset = 0
         while (offset < data.size) {
             val chunkSize = minOf(DEFAULT_TRANSFER_CHUNK_BYTES, data.size - offset)
