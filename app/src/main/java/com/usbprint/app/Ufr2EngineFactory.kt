@@ -3,9 +3,9 @@ package com.usbprint.app
 /**
  * Centralizes creation of the printer engine used by the app.
  *
- * The native engine remains optional until a verified LBP6030B-compatible
- * encoder is integrated.
+ * The real encoder is intentionally not selected until it is verified for
+ * the LBP6030B. Until then the application uses the safe SFP placeholder.
  */
 object Ufr2EngineFactory {
-    fun create(): Ufr2Engine = NativeUfr2Engine()
+    fun create(): Ufr2Engine = SfpUfr2Engine(UnavailableSfpEncoder())
 }
