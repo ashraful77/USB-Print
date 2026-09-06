@@ -2,7 +2,11 @@
 
 ## Current evidence
 
-Canon's UFRII LT V5.00 package explicitly supports the LBP6030/LBP6030B/LBP6030w family and uses CUPS. The package identifies the downloadable archive as `linux-UFRIILT-drv-v500-uken-18.tar.gz`.
+Canon's current UFRII LT V5.10 Linux driver officially supports the LBP6030/LBP6030B/LBP6030w family and lists Linux ARM support. The older V5.00 package explicitly supports the same family and uses CUPS.
+
+The V5.00 package identifies the downloadable archive as:
+
+`linux-UFRIILT-drv-v500-uken-18.tar.gz`
 
 Public build investigation identifies the source archive inside the package as:
 
@@ -12,15 +16,31 @@ and the extracted source tree as `cnrdrvcups-sfp-5.00`, with `allgen.sh` as a bu
 
 The LBP6030 PPD routes CUPS raster and CUPS command input to `rastertosfp`.
 
-## New conclusion
+## New investigation findings
 
-The next task is **source acquisition and dependency tracing**, not protocol guessing.
+Public build recipes confirm that the SFP source tree is not a self-contained Android-ready encoder. The V5.00 build is split between `cnrdrvcups-common-5.00` and `cnrdrvcups-sfp-5.00`. The SFP tree contains `cngplp`, `cpca`, and `StatusMonitor`; the common tree contains components including `backend`, `buftool`, `cngplp`, `cnjbig`, and `rasterfilter`.
 
-The Canon package license notice distinguishes Canon/licensor software from separately licensed free-software components. Therefore USB-Print must not copy the Canon package wholesale into the APK. Any reused component must first be individually identified and checked for redistribution compatibility.
+This means the next engineering task is dependency tracing around the actual `rastertosfp` path rather than copying the entire Canon driver.
+
+The Canon common-module project documents `buftool` as a byte-order-independent buffer library and states that its `buftool` and `libcnpk.so` modules are MIT licensed, while `cngplp` is GPL; it also warns that licensing can vary by file. Exact source-file headers must therefore be audited before reuse.
+
+A public build report also shows that the source build can require `buftool`, and that the packaged `rastertosfp` binary is a separate runtime filter. This is evidence that the encoder path has internal dependencies that must be isolated rather than guessed.
+
+Independent NXP investigation of the same printer family confirms the real CUPS pipeline:
+
+`application/vnd.cups-raster -> rastertosfp -> printer/canon -> USB backend`
+
+and identifies the printer as `Canon LBP6030/6040/6018L`, with device ID fields including `CID:CA_UFRIILT_OIP` and `CMD:LIPSLX,CPCA`.
+
+These observations strengthen the architecture but do **not** constitute a verified UFR II LT wire-format specification. They must not be used to generate experimental printer bytes.
+
+## Licensing boundary
+
+Canon's current V5.10 license page explicitly distinguishes Canon/licensor software from separately licensed third-party modules. It grants GPL rights to specified modules but otherwise restricts redistribution and derivative works of Canon software. Therefore USB-Print must not copy Canon's proprietary driver or proprietary binaries into the APK. Any reused source must be individually identified, license-cleared, and kept within the applicable license terms.
 
 ## Encoder investigation plan
 
-1. Obtain the official V5.00 archive.
+1. Obtain the official V5.00 source archive for analysis.
 2. Extract only for analysis; do not commit the archive or proprietary binaries.
 3. Extract `Sources/cnrdrvcups-sfp-5.00-1.tar.gz`.
 4. Trace `rastertosfp` build targets from `allgen.sh` and subordinate makefiles.
