@@ -88,7 +88,6 @@ class MainActivity : Activity() {
         testPrinterButton.setOnClickListener { testPrinterConnection() }
         selectDocumentButton.setOnClickListener { selectPdf() }
 
-        // Real Canon UFR II LT printing is now provided by the portable SFP/HB engine.
         printButton.isEnabled = false
         printButton.setOnClickListener { printSelectedPdf() }
 
@@ -110,8 +109,9 @@ class MainActivity : Activity() {
         statusText.text = "Encoding PDF with Canon LBP6030B SFP/HB driver..."
         connectionText.text = "Generating UFR II LT print stream..."
 
+        val sourceBytes = getDocumentSize(uri)
         Thread {
-            val result = printPipeline.printFirstPage(uri)
+            val result = printPipeline.printFirstPage(uri, sourceBytes)
             runOnUiThread {
                 selectDocumentButton.isEnabled = true
                 printButton.isEnabled = usbConnection.isOpen && selectedDocumentUri != null
@@ -157,7 +157,10 @@ class MainActivity : Activity() {
         } catch (_: SecurityException) {
             // Some document providers do not offer persistable permissions.
         }
-        documentText.text = getDocumentName(uri)
+        documentText.text = buildString {
+            append(getDocumentName(uri))
+            getDocumentSize(uri)?.let { append(" • ").append(formatBytes(it)) }
+        }
         printButton.isEnabled = usbConnection.isOpen
         statusText.text = "PDF selected ✓"
         connectionText.text = if (usbConnection.isOpen) {
@@ -173,6 +176,20 @@ class MainActivity : Activity() {
             if (cursor.moveToFirst()) name = cursor.getString(0)
         }
         return name ?: (uri.lastPathSegment ?: "Selected PDF")
+    }
+
+    private fun getDocumentSize(uri: Uri): Long? {
+        var size: Long? = null
+        contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst() && !cursor.isNull(0)) size = cursor.getLong(0)
+        }
+        return size
+    }
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> "%.1f KB".format(bytes / 1024.0)
+        else -> "%.2f MB".format(bytes / (1024.0 * 1024.0))
     }
 
     private fun configureSystemBars() {
