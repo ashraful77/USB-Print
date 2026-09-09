@@ -56,17 +56,22 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
         val transferred = currentConnection.controlTransfer(0xA1, 0x01, 0, currentInterface.id, buffer, 1, 1500)
         if (transferred == 1) {
             val status = buffer[0].toInt() and 0xFF
-            return CommunicationResult(true, formatPrinterStatus(status))
+            val selected = (status and 0x10) != 0
+            val noError = (status and 0x08) != 0
+            val paperEmpty = (status and 0x20) != 0
+            return CommunicationResult(true, buildString {
+                append("Printer responded ✓")
+                append("\nUSB status: 0x").append(status.toString(16).padStart(2, '0').uppercase())
+                if (selected) append("\nPrinter online / selected ✓")
+                if (noError) append("\nNo printer error reported ✓")
+                if (paperEmpty) append("\nPaper-out status reported")
+            })
         }
         return CommunicationResult(false, "Printer did not respond to the USB Printer Class status request.")
     }
 
     /** Sends an already-encoded Canon job and then checks both USB status and the IN endpoint. */
-    fun sendEncodedJob(
-        data: ByteArray,
-        sourceBytes: Long? = null,
-        timeoutMs: Int = DEFAULT_TRANSFER_TIMEOUT_MS
-    ): PrintTransferResult {
+    fun sendEncodedJob(data: ByteArray, sourceBytes: Long? = null, timeoutMs: Int = DEFAULT_TRANSFER_TIMEOUT_MS): PrintTransferResult {
         val currentConnection = connection ?: return PrintTransferResult(false, "Printer is not connected.")
         val endpoint = outEndpoint ?: return PrintTransferResult(false, "Printer bulk OUT endpoint is not available.")
         if (data.isEmpty()) return PrintTransferResult(false, "Encoded printer job is empty.")
@@ -125,7 +130,7 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
         val buffer = ByteArray(endpoint.maxPacketSize.coerceAtLeast(64))
         val n = currentConnection.bulkTransfer(endpoint, buffer, 0, buffer.size, 1000)
         return when {
-            n > 0 -> "IN endpoint response: $n byte(s) ${buffer.copyOf(n).joinToString(" ") { "%02X".format(it) }}"
+            n > 0 -> "IN endpoint response: $n byte(s) ${buffer.copyOf(n).joinToString(" ") { (it.toInt() and 0xFF).toString(16).padStart(2, '0').uppercase() }}"
             n == 0 -> "IN endpoint response: empty"
             else -> "IN endpoint response: none within timeout"
         }
@@ -144,11 +149,10 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
 
     val isOpen: Boolean get() = connection != null && outEndpoint != null
     private fun formatEndpoint(endpoint: UsbEndpoint): String = "0x${endpoint.address.toString(16).uppercase()} (${endpoint.maxPacketSize} bytes)"
-
-    private fun formatBytes(bytes: Long): String {
-        if (bytes < 1024) return "$bytes B"
-        if (bytes < 1024 * 1024) return "%.1f KB".format(bytes / 1024.0)
-        return "%.2f MB".format(bytes / (1024.0 * 1024.0))
+    private fun formatBytes(bytes: Long): String = when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> "%.1f KB".format(bytes / 1024.0)
+        else -> "%.2f MB".format(bytes / (1024.0 * 1024.0))
     }
 
     companion object {
