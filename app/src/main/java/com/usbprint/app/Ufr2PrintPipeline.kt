@@ -5,17 +5,15 @@ import android.net.Uri
 /**
  * Coordinates the complete print path without allowing unencoded data to reach USB.
  *
- * The pipeline is intentionally usable before the real SFP encoder exists: it
- * validates the raster job, asks the UFR II LT engine to encode it, and only then
- * transfers the returned printer bytes. A failed/unavailable encoder therefore
- * cannot accidentally print raw PDF or raster data.
+ * The pipeline renders the first PDF page, encodes it with the Canon SFP/HB engine,
+ * and only then transfers the generated printer bytes.
  */
 class Ufr2PrintPipeline(
     private val rasterizer: PdfRasterizer,
     private val engine: Ufr2Engine,
     private val usbConnection: UsbPrinterConnection
 ) {
-    fun printFirstPage(uri: Uri): Result {
+    fun printFirstPage(uri: Uri, sourceBytes: Long? = null): Result {
         if (!usbConnection.isOpen) {
             return Result(false, "Printer is not connected.")
         }
@@ -47,7 +45,7 @@ class Ufr2PrintPipeline(
             return Result(false, encoded.message)
         }
 
-        val transfer = usbConnection.sendEncodedJob(encoded.data)
+        val transfer = usbConnection.sendEncodedJob(encoded.data, sourceBytes = sourceBytes)
         return Result(transfer.success, transfer.message)
     }
 
