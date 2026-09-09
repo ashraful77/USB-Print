@@ -1,11 +1,6 @@
 package com.usbprint.app
 
-/**
- * Centralizes creation of the printer engine used by the app.
- *
- * The native engine remains optional until a verified LBP6030B-compatible
- * encoder is integrated.
- */
+/** Creates the portable Canon LBP6030B UFR II LT/SFP engine. */
 object Ufr2EngineFactory {
-    fun create(): Ufr2Engine = NativeUfr2Engine()
+    fun create(): Ufr2Engine = CanonSfpUfr2Engine()
 }
