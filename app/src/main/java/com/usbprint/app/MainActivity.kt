@@ -29,6 +29,7 @@ class MainActivity : Activity() {
 
     private lateinit var usbManager: UsbManager
     private lateinit var usbConnection: UsbPrinterConnection
+    private lateinit var printPipeline: Ufr2PrintPipeline
     private lateinit var statusText: TextView
     private lateinit var deviceText: TextView
     private lateinit var connectionText: TextView
@@ -65,6 +66,12 @@ class MainActivity : Activity() {
 
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
         usbConnection = UsbPrinterConnection(usbManager)
+        printPipeline = Ufr2PrintPipeline(
+            rasterizer = PdfRasterizer(this),
+            engine = Ufr2EngineFactory.create(),
+            usbConnection = usbConnection
+        )
+
         statusText = findViewById(R.id.statusText)
         deviceText = findViewById(R.id.deviceText)
         connectionText = findViewById(R.id.connectionText)
@@ -80,13 +87,38 @@ class MainActivity : Activity() {
         connectButton.setOnClickListener { requestUsbPermission() }
         testPrinterButton.setOnClickListener { testPrinterConnection() }
         selectDocumentButton.setOnClickListener { selectPdf() }
-        // Keep Print disabled until a verified UFR II LT encoder is integrated.
+
+        // Real Canon UFR II LT printing is now provided by the portable SFP/HB engine.
         printButton.isEnabled = false
-        printButton.setOnClickListener {
-            statusText.text = "UFR II LT print engine is not installed yet"
-            connectionText.text = "USB connection is ready ✓\nPDF printing will be enabled after the Canon UFR II LT engine is integrated."
-        }
+        printButton.setOnClickListener { printSelectedPdf() }
+
         scanUsbDevices()
+    }
+
+    private fun printSelectedPdf() {
+        val uri = selectedDocumentUri ?: run {
+            statusText.text = "Select a PDF first."
+            return
+        }
+        if (!usbConnection.isOpen) {
+            statusText.text = "Connect to the printer first."
+            return
+        }
+
+        printButton.isEnabled = false
+        selectDocumentButton.isEnabled = false
+        statusText.text = "Encoding PDF with Canon LBP6030B SFP/HB driver..."
+        connectionText.text = "Generating UFR II LT print stream..."
+
+        Thread {
+            val result = printPipeline.printFirstPage(uri)
+            runOnUiThread {
+                selectDocumentButton.isEnabled = true
+                printButton.isEnabled = usbConnection.isOpen && selectedDocumentUri != null
+                statusText.text = if (result.success) "Print job submitted ✓" else "Print job failed"
+                connectionText.text = result.message
+            }
+        }.start()
     }
 
     private fun testPrinterConnection() {
@@ -126,13 +158,12 @@ class MainActivity : Activity() {
             // Some document providers do not offer persistable permissions.
         }
         documentText.text = getDocumentName(uri)
-        // Selection alone must not enable Print: the UFR II LT encoder is not ready.
-        printButton.isEnabled = false
+        printButton.isEnabled = usbConnection.isOpen
         statusText.text = "PDF selected ✓"
         connectionText.text = if (usbConnection.isOpen) {
-            "USB connection is ready ✓\nPDF selected. UFR II LT print engine is not integrated yet."
+            "USB connection is ready ✓\nReady to encode and send Canon UFR II LT data."
         } else {
-            "Not connected\nPDF selected. Connect the printer and verify USB communication."
+            "Not connected\nConnect the Canon printer and verify USB communication."
         }
     }
 
@@ -213,11 +244,11 @@ class MainActivity : Activity() {
                 append("Connected ✓")
                 result.interfaceNumber?.let { append("\nInterface: ").append(it) }
                 if (result.endpointSummary.isNotBlank()) append("\n").append(result.endpointSummary)
-                append("\nUFR II LT engine is not integrated yet.")
+                append("\nCanon LBP6030B SFP/HB UFR II LT engine ready.")
             }
         } else "Not connected"
         testPrinterButton.isEnabled = result.success
-        printButton.isEnabled = false
+        printButton.isEnabled = result.success && selectedDocumentUri != null
     }
 
     private fun isPrinterLike(device: UsbDevice): Boolean {
