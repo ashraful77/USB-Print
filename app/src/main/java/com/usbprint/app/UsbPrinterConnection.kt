@@ -70,7 +70,12 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
         return CommunicationResult(false, "Printer did not respond to the USB Printer Class status request.")
     }
 
-    /** Sends an already-encoded Canon job and then checks both USB status and the IN endpoint. */
+    /**
+     * Sends the Canon CMLP stream one complete physical frame at a time.
+     * The native encoder produces 01 10 + big-endian frame length + 01 00
+     * headers. The Canon driver writes these channel-1 frames individually;
+     * do not split a frame across unrelated Android bulkTransfer calls.
+     */
     fun sendEncodedJob(data: ByteArray, sourceBytes: Long? = null, timeoutMs: Int = DEFAULT_TRANSFER_TIMEOUT_MS): PrintTransferResult {
         val currentConnection = connection ?: return PrintTransferResult(false, "Printer is not connected.")
         val endpoint = outEndpoint ?: return PrintTransferResult(false, "Printer bulk OUT endpoint is not available.")
@@ -78,13 +83,34 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
         require(timeoutMs > 0) { "USB transfer timeout must be positive" }
 
         var offset = 0
+        var frameCount = 0
         while (offset < data.size) {
-            val chunkSize = minOf(DEFAULT_TRANSFER_CHUNK_BYTES, data.size - offset)
-            val transferred = currentConnection.bulkTransfer(endpoint, data, offset, chunkSize, timeoutMs)
-            if (transferred != chunkSize) {
-                return PrintTransferResult(false, "USB print transfer stopped after $offset bytes (expected $chunkSize, sent $transferred).", offset)
+            if (data.size - offset < CMLP_HEADER_SIZE) {
+                return PrintTransferResult(false, "Invalid Canon CMLP stream: truncated frame header at byte $offset.", offset)
+            }
+            if ((data[offset].toInt() and 0xFF) != 0x01 || (data[offset + 1].toInt() and 0xFF) != 0x10) {
+                return PrintTransferResult(false, "Invalid Canon CMLP stream: expected channel-1 frame at byte $offset.", offset)
+            }
+
+            val frameLength = ((data[offset + 2].toInt() and 0xFF) shl 8) or
+                (data[offset + 3].toInt() and 0xFF)
+            if (frameLength < CMLP_HEADER_SIZE || offset + frameLength > data.size) {
+                return PrintTransferResult(false, "Invalid Canon CMLP frame length $frameLength at byte $offset.", offset)
+            }
+            if ((data[offset + 4].toInt() and 0xFF) != 0x01 || (data[offset + 5].toInt() and 0xFF) != 0x00) {
+                return PrintTransferResult(false, "Invalid Canon CMLP channel-1 frame flags at byte $offset.", offset)
+            }
+
+            val transferred = currentConnection.bulkTransfer(endpoint, data, offset, frameLength, timeoutMs)
+            if (transferred != frameLength) {
+                return PrintTransferResult(
+                    false,
+                    "Canon USB transfer stopped in frame ${frameCount + 1}: expected $frameLength bytes, sent $transferred.",
+                    offset + transferred.coerceAtLeast(0)
+                )
             }
             offset += transferred
+            frameCount++
         }
 
         val status = readPrinterClassStatus()
@@ -95,9 +121,10 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
                 append("\nPDF file: ").append(formatBytes(sourceBytes))
             }
             append("\nGenerated Canon print stream: ").append(formatBytes(offset.toLong()))
+            append("\nCMLP channel-1 frames sent: ").append(frameCount)
             append("\n").append(status)
             append("\n").append(inResult)
-            append("\nUSB transport is working. If the printer remains idle, the Canon HB print stream still needs protocol refinement.")
+            append("\nCanon stream handed to USB endpoint frame-by-frame.")
         }
         return PrintTransferResult(true, message, offset)
     }
@@ -156,7 +183,7 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
     }
 
     companion object {
-        private const val DEFAULT_TRANSFER_CHUNK_BYTES = 16 * 1024
+        private const val CMLP_HEADER_SIZE = 6
         private const val DEFAULT_TRANSFER_TIMEOUT_MS = 5000
     }
 }
