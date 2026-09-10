@@ -18,6 +18,13 @@ using SlimCompFn = int (*)(Byte*, Byte*, int, int, int, int, int*, void*, int, v
 struct CompParam { Byte xOffset[2]{}; Byte yOffset[2]{}; int8_t zOffset[2]{}; uint16_t farOffset{}; };
 struct NativeResult { bool ok; std::vector<Byte> data; std::string message; };
 
+// Canon's LBP6030 Linux UFR-II LT path renders A4 at these exact device
+// dimensions (600 dpi). Keeping the raster, BeginPage, and every HB transfer
+// band on the same geometry is critical; the printer can silently discard a
+// job when the compressed rows describe a different width.
+constexpr int CANON_A4_WIDTH = 4958;
+constexpr int CANON_A4_HEIGHT = 7016;
+
 jobject makeResult(JNIEnv* env, const NativeResult& result) {
     jclass cls = env->FindClass("com/usbprint/app/Ufr2Encoder$Result");
     if (!cls) return nullptr;
@@ -56,15 +63,27 @@ std::vector<Byte> beginJob(int dpi) {
 std::vector<Byte> beginMedia() { return {0x02,0xC3,0x00,0xC5,0x00,0xC6,0x00}; }
 std::vector<Byte> paperSource() { return {0x51,0xF2,0x00}; }
 std::vector<Byte> prepare() { return {0x61,0xE6,0x80,0x02,0xE5,0x00}; }
-std::vector<Byte> beginPage() { return {0x03,0xE7,0x85,0x13,0x80,0x1B,0x68,0xDE,0x80,0x00,0xC8,0x00,0xCA,0xA1,0x00,0x00,0xCB,0x00}; }
+
+std::vector<Byte> beginPage() {
+    return {0x03,0xE7,0x85,
+            static_cast<Byte>((CANON_A4_WIDTH >> 8) & 0xff), static_cast<Byte>(CANON_A4_WIDTH & 0xff),
+            static_cast<Byte>((CANON_A4_HEIGHT >> 8) & 0xff), static_cast<Byte>(CANON_A4_HEIGHT & 0xff),
+            0xDE,0x80,0x00,0xC8,0x00,0xCA,0xA1,0x00,0x00,0xCB,0x00};
+}
 
 std::vector<Byte> transferHeader(int lines, int dataLength) {
     std::vector<Byte> out;
-    // Repeat A4 width and band height in both HB geometry fields.
-    append(out, {0x62,0xE3,0x85,0x13,0x80}); put16be(out, lines);
-    append(out, {0xE8,0xA5,0x13,0x80}); put16be(out, lines);
+    // HB repeats page width + band height in both geometry fields.
+    append(out, {0x62,0xE3,0x85});
+    put16be(out, CANON_A4_WIDTH);
+    put16be(out, lines);
+    append(out, {0xE8,0xA5});
+    put16be(out, CANON_A4_WIDTH);
+    put16be(out, lines);
     append(out, {0xE1,0x00,0xD7,0x84});
-    put16be(out, dataLength); append(out, {0x9D,0x03}); put16be(out, dataLength);
+    put16be(out, dataLength);
+    append(out, {0x9D,0x03});
+    put16be(out, dataLength);
     return out;
 }
 
@@ -106,6 +125,12 @@ void appendCmlpFrames(std::vector<Byte>& out, const std::vector<Byte>& pdl) {
 NativeResult encode(const jbyte* raster, int width, int height, int dpi) {
     if (!raster || width <= 0 || height <= 0) return {false, {}, "Invalid raster"};
     if (dpi != 600) return {false, {}, "Canon LBP6030B SFP path currently requires 600 DPI"};
+    if (width != CANON_A4_WIDTH || height != CANON_A4_HEIGHT) {
+        std::ostringstream msg;
+        msg << "Canon LBP6030B requires A4 raster " << CANON_A4_WIDTH << "x" << CANON_A4_HEIGHT
+            << " at 600 DPI; received " << width << "x" << height;
+        return {false, {}, msg.str()};
+    }
 
     void* handle = dlopen("libcanon_slimsfp.so", RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
@@ -137,10 +162,6 @@ NativeResult encode(const jbyte* raster, int width, int height, int dpi) {
                 dlclose(handle); return {false, {}, "Canon SLIM compression returned an invalid result"};
             }
 
-            // Canon's driver passes the COMPPARAM returned by lCaptCompEx
-            // directly into slimCompressData. Do the same instead of using a
-            // hard-coded far offset, because the compressor can change the
-            // offsets between bands/images.
             std::vector<Byte> slc;
             slc.reserve(static_cast<size_t>(compressedLen) + 18);
             slc.push_back(param.xOffset[0]);
