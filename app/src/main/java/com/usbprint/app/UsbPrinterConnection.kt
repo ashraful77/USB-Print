@@ -94,7 +94,7 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
             if (sourceBytes != null && sourceBytes >= 0) {
                 append("\nPDF file: ").append(formatBytes(sourceBytes))
             }
-            append("\nGenerated Canon print stream: ").append(formatBytes(offset))
+            append("\nGenerated Canon print stream: ").append(formatBytes(offset.toLong()))
             append("\n").append(status)
             append("\n").append(inResult)
             append("\nUSB transport is working. If the printer remains idle, the Canon HB print stream still needs protocol refinement.")
