@@ -18,10 +18,6 @@ using SlimCompFn = int (*)(Byte*, Byte*, int, int, int, int, int*, void*, int, v
 struct CompParam { Byte xOffset[2]{}; Byte yOffset[2]{}; int8_t zOffset[2]{}; uint16_t farOffset{}; };
 struct NativeResult { bool ok; std::vector<Byte> data; std::string message; };
 
-// Canon's LBP6030 Linux UFR-II LT path renders A4 at these exact device
-// dimensions (600 dpi). Keeping the raster, BeginPage, and every HB transfer
-// band on the same geometry is critical; the printer can silently discard a
-// job when the compressed rows describe a different width.
 constexpr int CANON_A4_WIDTH = 4958;
 constexpr int CANON_A4_HEIGHT = 7016;
 
@@ -44,47 +40,78 @@ jobject makeResult(JNIEnv* env, const NativeResult& result) {
 }
 
 void put16be(std::vector<Byte>& out, int value) {
-    out.push_back(static_cast<Byte>((value >> 8) & 0xff)); out.push_back(static_cast<Byte>(value & 0xff));
+    out.push_back(static_cast<Byte>((value >> 8) & 0xff));
+    out.push_back(static_cast<Byte>(value & 0xff));
 }
 void put32le(std::vector<Byte>& out, int value) {
     uint32_t v = static_cast<uint32_t>(value);
-    out.push_back(static_cast<Byte>(v & 0xff)); out.push_back(static_cast<Byte>((v >> 8) & 0xff));
-    out.push_back(static_cast<Byte>((v >> 16) & 0xff)); out.push_back(static_cast<Byte>((v >> 24) & 0xff));
+    out.push_back(static_cast<Byte>(v & 0xff));
+    out.push_back(static_cast<Byte>((v >> 8) & 0xff));
+    out.push_back(static_cast<Byte>((v >> 16) & 0xff));
+    out.push_back(static_cast<Byte>((v >> 24) & 0xff));
 }
-void append(std::vector<Byte>& out, std::initializer_list<int> values) { for (int v : values) out.push_back(static_cast<Byte>(v)); }
+void append(std::vector<Byte>& out, std::initializer_list<int> values) {
+    for (int v : values) out.push_back(static_cast<Byte>(v));
+}
 
+// Keep native PDL commands byte-for-byte aligned with the reference Kotlin HB encoder.
 std::vector<Byte> beginJob(int dpi) {
     std::vector<Byte> out;
-    append(out, {0x01,0xC1,0x85,0x10,0x00,0x10,0x89,0xC2,0x00,0xD8,0x84});
+    append(out, {0x01, 0xC1, 0x85});
     put16be(out, dpi);
-    append(out, {0xDD,0x80,0xC8,0xF0,0x84,0x08,0x00,0x02});
+    put16be(out, dpi);
+    append(out, {
+        0xC2, 0x00,
+        0xD8, 0x84, 0x00, 0x01,
+        0xDD, 0x80,
+        0xC8, 0xF0,
+        0x84, 0x08, 0x00, 0x02
+    });
     return out;
 }
-std::vector<Byte> beginMedia() { return {0x02,0xC3,0x00,0xC5,0x00,0xC6,0x00}; }
-std::vector<Byte> paperSource() { return {0x51,0xF2,0x00}; }
-std::vector<Byte> prepare() { return {0x61,0xE6,0x80,0x02,0xE5,0x00}; }
+
+std::vector<Byte> beginMedia() {
+    return {0x02, 0xC3, 0x7F, 0xF1, 0x85, 0x00, 0x00, 0x00, 0x00, 0xC5, 0x00, 0xC6, 0x00};
+}
+std::vector<Byte> paperSource() { return {0x51, 0xF2, 0x00}; }
+std::vector<Byte> prepare() { return {0x61, 0xE6, 0x80, 0x02, 0xE5, 0x00}; }
 
 std::vector<Byte> beginPage() {
-    return {0x03,0xE7,0x85,
+    return {0x03, 0xE7, 0x85,
             static_cast<Byte>((CANON_A4_WIDTH >> 8) & 0xff), static_cast<Byte>(CANON_A4_WIDTH & 0xff),
             static_cast<Byte>((CANON_A4_HEIGHT >> 8) & 0xff), static_cast<Byte>(CANON_A4_HEIGHT & 0xff),
-            0xDE,0x80,0x00,0xC8,0x00,0xCA,0xA1,0x00,0x00,0xCB,0x00};
+            0xDE, 0x80, 0x00, 0xC8, 0x00, 0xCA, 0xA1, 0x00, 0x00, 0xCB, 0x00};
 }
 
 std::vector<Byte> transferHeader(int lines, int dataLength) {
     std::vector<Byte> out;
-    // HB repeats page width + band height in both geometry fields.
-    append(out, {0x62,0xE3,0x85});
+    append(out, {0x62, 0xE3, 0x85});
     put16be(out, CANON_A4_WIDTH);
     put16be(out, lines);
-    append(out, {0xE8,0xA5});
+    append(out, {0xE8, 0xA5});
     put16be(out, CANON_A4_WIDTH);
     put16be(out, lines);
-    append(out, {0xE1,0x00,0xD7,0x84});
-    put16be(out, dataLength);
-    append(out, {0x9D,0x03});
-    put16be(out, dataLength);
+    append(out, {0xE1, 0x00, 0xD7});
+    if (dataLength <= 0xFFFF) {
+        append(out, {0x84});
+        put16be(out, dataLength);
+        append(out, {0x9D});
+        put16be(out, dataLength);
+    } else {
+        append(out, {0x88});
+        put32be(out, dataLength);
+        append(out, {0x9E});
+        put32be(out, dataLength);
+    }
     return out;
+}
+
+void put32be(std::vector<Byte>& out, int value) {
+    uint32_t v = static_cast<uint32_t>(value);
+    out.push_back(static_cast<Byte>((v >> 24) & 0xff));
+    out.push_back(static_cast<Byte>((v >> 16) & 0xff));
+    out.push_back(static_cast<Byte>((v >> 8) & 0xff));
+    out.push_back(static_cast<Byte>(v & 0xff));
 }
 
 std::vector<Byte> oneBitToTwoBit(const jbyte* raster, int width, int height) {
@@ -118,7 +145,7 @@ void appendCmlpFrames(std::vector<Byte>& out, const std::vector<Byte>& pdl) {
         appendCmlpFrame(out, pdl.data() + pos, n);
         pos += n;
     }
-    static const Byte flush[] = {0x08,0x00,0x00,0x00};
+    static const Byte flush[] = {0x08, 0x00, 0x00, 0x00};
     appendCmlpFrame(out, flush, sizeof(flush));
 }
 
@@ -175,7 +202,7 @@ NativeResult encode(const jbyte* raster, int width, int height, int dpi) {
             slc.push_back(0x01);
             put32le(slc, compressedLen + 4);
             slc.insert(slc.end(), compressed.begin(), compressed.begin() + compressedLen);
-            append(slc, {0xBD,0x3C,0xDC,0x80,0x00});
+            append(slc, {0xBD, 0x3C, 0xDC, 0x80, 0x00});
 
             const int transferLength = compressedLen + 18;
             if (static_cast<int>(slc.size()) != transferLength) {
