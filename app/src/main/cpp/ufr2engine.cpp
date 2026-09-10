@@ -50,6 +50,13 @@ void put32le(std::vector<Byte>& out, int value) {
     out.push_back(static_cast<Byte>((v >> 16) & 0xff));
     out.push_back(static_cast<Byte>((v >> 24) & 0xff));
 }
+void put32be(std::vector<Byte>& out, int value) {
+    uint32_t v = static_cast<uint32_t>(value);
+    out.push_back(static_cast<Byte>((v >> 24) & 0xff));
+    out.push_back(static_cast<Byte>((v >> 16) & 0xff));
+    out.push_back(static_cast<Byte>((v >> 8) & 0xff));
+    out.push_back(static_cast<Byte>(v & 0xff));
+}
 void append(std::vector<Byte>& out, std::initializer_list<int> values) {
     for (int v : values) out.push_back(static_cast<Byte>(v));
 }
@@ -104,14 +111,6 @@ std::vector<Byte> transferHeader(int lines, int dataLength) {
         put32be(out, dataLength);
     }
     return out;
-}
-
-void put32be(std::vector<Byte>& out, int value) {
-    uint32_t v = static_cast<uint32_t>(value);
-    out.push_back(static_cast<Byte>((v >> 24) & 0xff));
-    out.push_back(static_cast<Byte>((v >> 16) & 0xff));
-    out.push_back(static_cast<Byte>((v >> 8) & 0xff));
-    out.push_back(static_cast<Byte>(v & 0xff));
 }
 
 std::vector<Byte> oneBitToTwoBit(const jbyte* raster, int width, int height) {
