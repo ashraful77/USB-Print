@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.pdf.PdfDocument
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
@@ -19,6 +21,8 @@ import android.view.WindowInsets
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import java.io.File
+import java.io.FileOutputStream
 
 class MainActivity : Activity() {
 
@@ -38,6 +42,7 @@ class MainActivity : Activity() {
     private lateinit var connectButton: Button
     private lateinit var testPrinterButton: Button
     private lateinit var selectDocumentButton: Button
+    private lateinit var simpleTextButton: Button
     private lateinit var printButton: Button
 
     private var selectedDevice: UsbDevice? = null
@@ -80,6 +85,7 @@ class MainActivity : Activity() {
         connectButton = findViewById(R.id.connectButton)
         testPrinterButton = findViewById(R.id.testPrinterButton)
         selectDocumentButton = findViewById(R.id.selectDocumentButton)
+        simpleTextButton = findViewById(R.id.simpleTextButton)
         printButton = findViewById(R.id.printButton)
 
         registerUsbPermissionReceiver()
@@ -87,11 +93,71 @@ class MainActivity : Activity() {
         connectButton.setOnClickListener { requestUsbPermission() }
         testPrinterButton.setOnClickListener { testPrinterConnection() }
         selectDocumentButton.setOnClickListener { selectPdf() }
+        simpleTextButton.setOnClickListener { printSimpleText() }
 
         printButton.isEnabled = false
         printButton.setOnClickListener { printSelectedPdf() }
 
         scanUsbDevices()
+    }
+
+    private fun printSimpleText() {
+        if (!usbConnection.isOpen) {
+            statusText.text = "Connect to the printer first."
+            return
+        }
+
+        simpleTextButton.isEnabled = false
+        printButton.isEnabled = false
+        selectDocumentButton.isEnabled = false
+        statusText.text = "Preparing simple text test page..."
+        connectionText.text = "Generating a one-page test PDF and sending it through the Canon print pipeline..."
+
+        Thread {
+            var tempFile: File? = null
+            val result = runCatching {
+                tempFile = createSimpleTextPdf()
+                val file = tempFile ?: error("Could not create test page")
+                printPipeline.printFirstPage(Uri.fromFile(file), file.length())
+            }.getOrElse { error ->
+                Ufr2PrintPipeline.Result(false, "Could not create simple text test page: ${error.message ?: "unknown error"}")
+            }
+            tempFile?.delete()
+
+            runOnUiThread {
+                selectDocumentButton.isEnabled = true
+                simpleTextButton.isEnabled = usbConnection.isOpen
+                printButton.isEnabled = usbConnection.isOpen && selectedDocumentUri != null
+                statusText.text = if (result.success) "Simple text print submitted ✓" else "Simple text print failed"
+                connectionText.text = result.message
+            }
+        }.start()
+    }
+
+    /** Creates a tiny A4 PDF so the simple-text test uses exactly the same real print path as PDF jobs. */
+    private fun createSimpleTextPdf(): File {
+        val document = PdfDocument()
+        try {
+            val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create()
+            val page = document.startPage(pageInfo)
+            val canvas = page.canvas
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                textSize = 28f
+                typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.NORMAL)
+            }
+            canvas.drawText("USB Print Test", 48f, 80f, paint)
+            paint.textSize = 20f
+            canvas.drawText("Hello from my phone!", 48f, 125f, paint)
+            canvas.drawText("Canon LBP6030B", 48f, 160f, paint)
+            document.finishPage(page)
+
+            val file = File(cacheDir, "usb_print_simple_text.pdf")
+            FileOutputStream(file).use { output -> document.writeTo(output) }
+            return file
+        } finally {
+            document.close()
+        }
     }
 
     private fun printSelectedPdf() {
@@ -105,6 +171,7 @@ class MainActivity : Activity() {
         }
 
         printButton.isEnabled = false
+        simpleTextButton.isEnabled = false
         selectDocumentButton.isEnabled = false
         statusText.text = "Encoding PDF with Canon LBP6030B SFP/HB driver..."
         connectionText.text = "Generating UFR II LT print stream..."
@@ -114,6 +181,7 @@ class MainActivity : Activity() {
             val result = printPipeline.printFirstPage(uri, sourceBytes)
             runOnUiThread {
                 selectDocumentButton.isEnabled = true
+                simpleTextButton.isEnabled = usbConnection.isOpen
                 printButton.isEnabled = usbConnection.isOpen && selectedDocumentUri != null
                 statusText.text = if (result.success) "Print job submitted ✓" else "Print job failed"
                 connectionText.text = result.message
@@ -162,6 +230,7 @@ class MainActivity : Activity() {
             getDocumentSize(uri)?.let { append(" • ").append(formatBytes(it)) }
         }
         printButton.isEnabled = usbConnection.isOpen
+        simpleTextButton.isEnabled = usbConnection.isOpen
         statusText.text = "PDF selected ✓"
         connectionText.text = if (usbConnection.isOpen) {
             "USB connection is ready ✓\nReady to encode and send Canon UFR II LT data."
@@ -228,6 +297,7 @@ class MainActivity : Activity() {
         usbConnection.close()
         connectionText.text = "Not connected"
         testPrinterButton.isEnabled = false
+        simpleTextButton.isEnabled = false
         printButton.isEnabled = false
         if (devices.isEmpty()) {
             statusText.text = "No USB device detected"
@@ -265,6 +335,7 @@ class MainActivity : Activity() {
             }
         } else "Not connected"
         testPrinterButton.isEnabled = result.success
+        simpleTextButton.isEnabled = result.success
         printButton.isEnabled = result.success && selectedDocumentUri != null
     }
 
