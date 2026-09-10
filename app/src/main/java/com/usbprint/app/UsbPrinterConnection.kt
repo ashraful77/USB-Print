@@ -6,6 +6,8 @@ import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
+import android.hardware.usb.UsbRequest
+import java.nio.ByteBuffer
 
 class UsbPrinterConnection(private val usbManager: UsbManager) {
     data class Result(val success: Boolean, val message: String, val interfaceNumber: Int? = null, val endpointSummary: String = "")
@@ -42,7 +44,12 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
             outEndpoint = candidateOut
             inEndpoint = candidateIn
             return Result(true, "USB printer interface connected ✓", candidate.id, buildString {
-                append("OUT endpoint: ").append(formatEndpoint(candidateOut))
+                append("Interface: id=").append(candidate.id)
+                    .append(" class=").append(candidate.interfaceClass)
+                    .append(" subclass=").append(candidate.interfaceSubclass)
+                    .append(" protocol=").append(candidate.interfaceProtocol)
+                    .append(" alt=").append(candidate.alternateSetting)
+                append("\nOUT endpoint: ").append(formatEndpoint(candidateOut))
                 append("\nIN endpoint: ").append(candidateIn?.let { formatEndpoint(it) } ?: "none")
             })
         }
@@ -77,6 +84,10 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
         require(timeoutMs > 0) { "USB transfer timeout must be positive" }
 
         val transport = initializeCanonMlc(currentConnection, endpoint, timeoutMs)
+        if (!transport.success) {
+            return PrintTransferResult(false, "Canon MLC handshake failed. Print stream was NOT sent.\n${transport.message}")
+        }
+
         var offset = 0
         var frameCount = 0
         while (offset < data.size) {
@@ -120,16 +131,28 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
         val inEp = inEndpoint
             ?: return CommunicationResult(false, "Canon MLC initialization requires the printer IN endpoint, but none was found.")
 
+        // Linux usblp keeps a bulk-IN read pending before it writes the first
+        // Canon port-init bytes. Reproduce that ordering on Android.
+        val initRequest = UsbRequest()
+        val initBuffer = ByteBuffer.allocate(9)
+        if (!initRequest.initialize(usb, inEp)) {
+            return CommunicationResult(false, "Could not initialize Android UsbRequest on the Canon IN endpoint.")
+        }
+        if (!initRequest.queue(initBuffer, 9)) {
+            initRequest.close()
+            return CommunicationResult(false, "Could not pre-arm the Canon 9-byte initialization response read.")
+        }
+
         val init = byteArrayOf(0x00, 0x00, 0x00, 0x08, 0x01, 0x00, 0x00, 0x08)
         val initSent = usb.bulkTransfer(endpoint, init, 0, init.size, timeoutMs)
         if (initSent != init.size) {
+            initRequest.cancel()
+            initRequest.close()
             return CommunicationResult(false, "Canon MLC initialization failed: sent $initSent/${init.size} bytes.")
         }
 
-        // The Canon driver reads this as a raw 9-byte port response. Android's
-        // bulk endpoint can return the response in a separate short packet, so
-        // poll repeatedly instead of relying on one long bulkTransfer call.
-        val initResponse = readBulkResponsePolling(usb, inEp, 9, 2500)
+        val initResponse = waitForQueuedResponse(usb, initRequest, initBuffer, 3000)
+        initRequest.close()
         val initHex = initResponse?.joinToString(" ") { hexByte(it) }
         val initValid = initResponse?.let { response ->
             response.size == 9 &&
@@ -141,10 +164,10 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
                 (response[8].toInt() and 0xFF) == 0x08
         } == true
 
-        // Even if Android did not observe this back-channel packet, continue
-        // with the exact Canon service-open request. This makes the app useful
-        // on printers/USB host stacks that do not expose the back-channel in
-        // the same way as Linux while preserving the packet for diagnostics.
+        if (!initValid) {
+            return CommunicationResult(false, "Canon initialization response was not the required 9-byte packet${initHex?.let { ": [$it]" } ?: ""}.")
+        }
+
         val requestPayload = byteArrayOf(
             0x01, 0x01, 0x10,
             0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(),
@@ -159,12 +182,27 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
         request[4] = 0x01
         request[5] = 0x00
         System.arraycopy(requestPayload, 0, request, CMLP_HEADER_SIZE, requestPayload.size)
+
+        // Again pre-arm IN before sending the channel-open request.
+        val openRequest = UsbRequest()
+        val openBuffer = ByteBuffer.allocate(12)
+        if (!openRequest.initialize(usb, inEp)) {
+            return CommunicationResult(false, "Could not initialize Android UsbRequest for the Canon channel-open response.")
+        }
+        if (!openRequest.queue(openBuffer, 12)) {
+            openRequest.close()
+            return CommunicationResult(false, "Could not pre-arm the Canon 12-byte channel-open response read.")
+        }
+
         val requestSent = usb.bulkTransfer(endpoint, request, 0, request.size, timeoutMs)
         if (requestSent != request.size) {
+            openRequest.cancel()
+            openRequest.close()
             return CommunicationResult(false, "Canon MLC channel-open request failed: sent $requestSent/${request.size} bytes.")
         }
 
-        val rawResponse = readBulkResponsePolling(usb, inEp, 12, 3000)
+        val rawResponse = waitForQueuedResponse(usb, openRequest, openBuffer, 3000)
+        openRequest.close()
         val payload = rawResponse?.let { extractCmlpPayload(it) }
         val rawHex = rawResponse?.joinToString(" ") { hexByte(it) }
         val payloadHex = payload?.joinToString(" ") { hexByte(it) }
@@ -180,33 +218,31 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
             val sendSize = ((payload!![4].toInt() and 0xFF) shl 8) or (payload[5].toInt() and 0xFF)
             val recvSize = ((payload[6].toInt() and 0xFF) shl 8) or (payload[7].toInt() and 0xFF)
             if (sendSize > 6) {
-                return CommunicationResult(true, "channel-open response received ✓ (send=$sendSize, recv=$recvSize; init=${if (initValid) "valid" else "missing${initHex?.let { " [$it]" } ?: ""}"})")
+                return CommunicationResult(true, "Canon MLC handshake valid ✓ (init=9-byte valid, channel-open response valid; send=$sendSize, recv=$recvSize)")
             }
         }
 
-        return CommunicationResult(
-            true,
-            buildString {
-                append("MLC handshake packets sent; Android did not validate the Canon back-channel response")
-                if (initValid) append("; init response valid") else append("; init response missing").also { if (initHex != null) append(" [$initHex]") }
-                if (rawHex != null) append("; open response [$rawHex]")
-                else append("; open response not observed")
-                if (payloadHex != null) append("; payload [$payloadHex]")
-                append("; continuing with print stream")
-            }
-        )
+        return CommunicationResult(false, buildString {
+            append("Canon channel-open response was not the required 12-byte packet")
+            if (rawHex != null) append(" [$rawHex]") else append("; no response observed")
+            if (payloadHex != null) append("; payload [$payloadHex]")
+        })
     }
 
-    private fun readBulkResponsePolling(usb: UsbDeviceConnection, endpoint: UsbEndpoint, expectedBytes: Int, totalTimeoutMs: Int): ByteArray? {
-        val deadline = System.currentTimeMillis() + totalTimeoutMs
-        val capacity = endpoint.maxPacketSize.coerceAtLeast(expectedBytes).coerceAtMost(4096)
-        while (System.currentTimeMillis() < deadline) {
-            val buffer = ByteArray(capacity)
-            val remaining = (deadline - System.currentTimeMillis()).coerceAtLeast(1L).coerceAtMost(250L).toInt()
-            val n = usb.bulkTransfer(endpoint, buffer, 0, buffer.size, remaining)
-            if (n > 0) return buffer.copyOf(n)
+    private fun waitForQueuedResponse(usb: UsbDeviceConnection, request: UsbRequest, buffer: ByteBuffer, timeoutMs: Long): ByteArray? {
+        return try {
+            val completed = usb.requestWait(timeoutMs)
+            if (completed !== request) return null
+            val count = buffer.position()
+            if (count <= 0) return null
+            buffer.flip()
+            val result = ByteArray(count)
+            buffer.get(result)
+            result
+        } catch (_: Exception) {
+            request.cancel()
+            null
         }
-        return null
     }
 
     private fun extractCmlpPayload(raw: ByteArray): ByteArray {
