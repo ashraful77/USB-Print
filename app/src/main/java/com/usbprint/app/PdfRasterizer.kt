@@ -7,6 +7,7 @@ import android.graphics.Matrix
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import java.io.File
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -33,10 +34,7 @@ class PdfRasterizer(private val context: Context) {
     fun renderPage(uri: Uri, pageNumber: Int, dpi: Int = DEFAULT_DPI): RasterPage {
         require(dpi in 72..600) { "DPI must be between 72 and 600" }
 
-        val descriptor = context.contentResolver.openFileDescriptor(uri, "r")
-            ?: throw IllegalArgumentException("Could not open the selected PDF")
-
-        descriptor.use { pfd: ParcelFileDescriptor ->
+        openDescriptor(uri).use { pfd ->
             PdfRenderer(pfd).use { renderer ->
                 require(pageNumber in 0 until renderer.pageCount) {
                     "PDF page $pageNumber is outside the document"
@@ -85,6 +83,15 @@ class PdfRasterizer(private val context: Context) {
                 }
             }
         }
+    }
+
+    private fun openDescriptor(uri: Uri): ParcelFileDescriptor {
+        if (uri.scheme.equals("file", ignoreCase = true)) {
+            val path = uri.path ?: throw IllegalArgumentException("Local PDF path is missing")
+            return ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY)
+        }
+        return context.contentResolver.openFileDescriptor(uri, "r")
+            ?: throw IllegalArgumentException("Could not open the selected PDF")
     }
 
     private fun packMonochrome(
