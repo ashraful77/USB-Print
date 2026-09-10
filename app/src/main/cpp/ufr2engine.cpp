@@ -97,9 +97,6 @@ void appendCmlpFrames(std::vector<Byte>& out, const std::vector<Byte>& pdl) {
         appendCmlpFrame(out, pdl.data() + pos, n);
         pos += n;
     }
-    // cnpkSendData issues command 8 after the jobWrite data. The USB module
-    // exposes that flush as the channel-1 ten-byte CMLP frame recovered from
-    // libcomm_usbmlportr.
     static const Byte flush[] = {0x08,0x00,0x00,0x00};
     appendCmlpFrame(out, flush, sizeof(flush));
 }
@@ -138,8 +135,21 @@ NativeResult encode(const jbyte* raster, int width, int height, int dpi) {
                 dlclose(handle); return {false, {}, "Canon SLIM compression returned an invalid result"};
             }
 
+            // Canon's driver passes the COMPPARAM returned by lCaptCompEx
+            // directly into slimCompressData. Do the same instead of using a
+            // hard-coded far offset, because the compressor can change the
+            // offsets between bands/images.
             std::vector<Byte> slc;
-            append(slc, {0x03,0x09,0x06,0x01,0x00,0x00,0x50,0x00,0x01});
+            slc.reserve(static_cast<size_t>(compressedLen) + 18);
+            slc.push_back(param.xOffset[0]);
+            slc.push_back(param.xOffset[1]);
+            slc.push_back(param.yOffset[0]);
+            slc.push_back(param.yOffset[1]);
+            slc.push_back(static_cast<Byte>(param.zOffset[0]));
+            slc.push_back(static_cast<Byte>(param.zOffset[1]));
+            slc.push_back(static_cast<Byte>(param.farOffset & 0xff));
+            slc.push_back(static_cast<Byte>((param.farOffset >> 8) & 0xff));
+            slc.push_back(0x01);
             put32le(slc, compressedLen + 4);
             slc.insert(slc.end(), compressed.begin(), compressed.begin() + compressedLen);
             append(slc, {0xBD,0x3C,0xDC,0x80,0x00});
