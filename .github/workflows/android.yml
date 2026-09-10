@@ -5,17 +5,17 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: android-build-${{ github.ref }}
-  cancel-in-progress: true
+env:
+  ANDROID_NDK_VERSION: 27.2.12479018
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
@@ -27,20 +27,34 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK 36 and NDK
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
+      - name: Install Android SDK and NDK
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;${ANDROID_NDK_VERSION}"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.7.1'
+          cache-read-only: false
+
+      - name: Verify build environment
+        run: |
+          java -version
+          sdkmanager --list_installed | grep -E 'platforms;android-36|build-tools;36.0.0|ndk;27.2.12479018' || true
+          gradle --version
 
       - name: Build debug APK
-        run: gradle assembleDebug --stacktrace -Pandroid.ndkVersion=27.2.12479018
+        run: gradle assembleDebug --stacktrace --info -Pandroid.ndkVersion=${ANDROID_NDK_VERSION}
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
@@ -48,3 +62,4 @@ jobs:
           name: USB-Print-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 7
