@@ -14,10 +14,11 @@ import kotlin.math.roundToInt
 /**
  * Renders PDF pages into packed 1-bit monochrome raster data.
  *
- * Rendering is performed in vertical stripes so a 600 DPI A4 page does not
- * require a full-page ARGB bitmap in memory. This is deliberately separate
- * from the printer protocol: the Canon LBP6030 family expects UFR II LT, so
- * the raster output must be encoded by the UFR engine before USB transfer.
+ * Canon's LBP6030 UFR-II LT Linux path uses an exact 4958x7016 A4 device
+ * raster at 600 dpi. The printer-side HB/SLC geometry must match those rows,
+ * so A4 pages are rendered to those exact dimensions rather than the generic
+ * 595x842-point PDF-to-600dpi rounding (which produces slightly different
+ * dimensions).
  */
 class PdfRasterizer(private val context: Context) {
     data class RasterPage(
@@ -41,10 +42,15 @@ class PdfRasterizer(private val context: Context) {
                 }
                 renderer.openPage(pageNumber).use { page ->
                     val scale = dpi / 72f
-                    val width = (page.width * scale).roundToInt().coerceAtLeast(1)
-                    val height = (page.height * scale).roundToInt().coerceAtLeast(1)
+                    val a4 = isA4Page(page.width, page.height)
+                    val width = if (dpi == 600 && a4) CANON_A4_WIDTH else
+                        (page.width * scale).roundToInt().coerceAtLeast(1)
+                    val height = if (dpi == 600 && a4) CANON_A4_HEIGHT else
+                        (page.height * scale).roundToInt().coerceAtLeast(1)
                     val bytesPerRow = (width + 7) / 8
                     val packed = ByteArray(bytesPerRow * height)
+                    val scaleX = width.toFloat() / page.width.toFloat()
+                    val scaleY = height.toFloat() / page.height.toFloat()
 
                     var stripeTop = 0
                     while (stripeTop < height) {
@@ -57,7 +63,7 @@ class PdfRasterizer(private val context: Context) {
                         try {
                             bitmap.eraseColor(Color.WHITE)
                             val transform = Matrix().apply {
-                                setScale(scale, scale)
+                                setScale(scaleX, scaleY)
                                 postTranslate(0f, -stripeTop.toFloat())
                             }
                             page.render(
@@ -83,6 +89,11 @@ class PdfRasterizer(private val context: Context) {
                 }
             }
         }
+    }
+
+    private fun isA4Page(widthPoints: Int, heightPoints: Int): Boolean {
+        val ratio = widthPoints.toFloat() / heightPoints.toFloat()
+        return ratio in 0.69f..0.73f
     }
 
     private fun openDescriptor(uri: Uri): ParcelFileDescriptor {
@@ -123,6 +134,8 @@ class PdfRasterizer(private val context: Context) {
 
     companion object {
         const val DEFAULT_DPI = 600
+        private const val CANON_A4_WIDTH = 4958
+        private const val CANON_A4_HEIGHT = 7016
         private const val STRIPE_HEIGHT_PX = 512
         private const val THRESHOLD = 180
     }
