@@ -71,16 +71,19 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
     }
 
     /**
-     * Sends the Canon CMLP stream one complete physical frame at a time.
-     * The native encoder produces 01 10 + big-endian frame length + 01 00
-     * headers. The Canon driver writes these channel-1 frames individually;
-     * do not split a frame across unrelated Android bulkTransfer calls.
+     * Canon's MLC USB transport has an initialization exchange before the
+     * channel-1 print stream. The Linux driver first writes the 8-byte MLC
+     * initialization record, then opens channel 1 through channel 0. Android
+     * must reproduce that exchange rather than jumping directly to PDL data.
      */
     fun sendEncodedJob(data: ByteArray, sourceBytes: Long? = null, timeoutMs: Int = DEFAULT_TRANSFER_TIMEOUT_MS): PrintTransferResult {
         val currentConnection = connection ?: return PrintTransferResult(false, "Printer is not connected.")
         val endpoint = outEndpoint ?: return PrintTransferResult(false, "Printer bulk OUT endpoint is not available.")
         if (data.isEmpty()) return PrintTransferResult(false, "Encoded printer job is empty.")
         require(timeoutMs > 0) { "USB transfer timeout must be positive" }
+
+        val transport = initializeCanonMlc(currentConnection, endpoint, timeoutMs)
+        if (!transport.success) return PrintTransferResult(false, transport.message)
 
         var offset = 0
         var frameCount = 0
@@ -98,7 +101,7 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
                 return PrintTransferResult(false, "Invalid Canon CMLP frame length $frameLength at byte $offset.", offset)
             }
             if ((data[offset + 4].toInt() and 0xFF) != 0x01 || (data[offset + 5].toInt() and 0xFF) != 0x00) {
-                return PrintTransferResult(false, "Invalid Canon CMLP channel-1 frame flags at byte $offset.", offset)
+                return PrintTransferResult(false, "Invalid Canon channel-1 frame flags at byte $offset.", offset)
             }
 
             val transferred = currentConnection.bulkTransfer(endpoint, data, offset, frameLength, timeoutMs)
@@ -117,16 +120,61 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
         val inResult = readImmediatePrinterResponse()
         val message = buildString {
             append("USB transfer completed ✓")
-            if (sourceBytes != null && sourceBytes >= 0) {
-                append("\nPDF file: ").append(formatBytes(sourceBytes))
-            }
+            if (sourceBytes != null && sourceBytes >= 0) append("\nPDF file: ").append(formatBytes(sourceBytes))
             append("\nGenerated Canon print stream: ").append(formatBytes(offset.toLong()))
             append("\nCMLP channel-1 frames sent: ").append(frameCount)
+            append("\nCanon MLC initialization: ").append(transport.message)
             append("\n").append(status)
             append("\n").append(inResult)
             append("\nCanon stream handed to USB endpoint frame-by-frame.")
         }
         return PrintTransferResult(true, message, offset)
+    }
+
+    private fun initializeCanonMlc(
+        usb: UsbDeviceConnection,
+        endpoint: UsbEndpoint,
+        timeoutMs: Int
+    ): CommunicationResult {
+        // C_USBPort::InitSub() from Canon libcomm_usbmlportr writes this exact
+        // 8-byte record with WritePort before any MLC channel is opened.
+        val init = byteArrayOf(0x00, 0x00, 0x00, 0x08, 0x01, 0x00, 0x00, 0x08)
+        val initSent = usb.bulkTransfer(endpoint, init, 0, init.size, timeoutMs)
+        if (initSent != init.size) {
+            return CommunicationResult(false, "Canon MLC initialization failed: sent $initSent/${init.size} bytes.")
+        }
+
+        // C_MLCChannel::OpenSub() sends channel-0 service-open request:
+        // 01 <channel=01> <service=10> FF FF FF FF FF FF.
+        val requestPayload = byteArrayOf(0x01, 0x01, 0x10, 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte())
+        val frameLength = requestPayload.size + CMLP_HEADER_SIZE
+        val request = ByteArray(frameLength)
+        request[0] = 0x00
+        request[1] = 0x00
+        request[2] = ((frameLength ushr 8) and 0xFF).toByte()
+        request[3] = (frameLength and 0xFF).toByte()
+        request[4] = 0x01
+        request[5] = 0x00
+        System.arraycopy(requestPayload, 0, request, CMLP_HEADER_SIZE, requestPayload.size)
+        val requestSent = usb.bulkTransfer(endpoint, request, 0, request.size, timeoutMs)
+        if (requestSent != request.size) {
+            return CommunicationResult(false, "Canon MLC channel-open request failed: sent $requestSent/${request.size} bytes.")
+        }
+
+        // The driver waits for the channel-open response on the back channel.
+        // We expose the response in the status so the next hardware test tells
+        // us whether the printer accepted the MLC service before PDL is sent.
+        val inEp = inEndpoint ?: return CommunicationResult(true, "initialization records sent; no IN endpoint available")
+        val response = ByteArray(inEp.maxPacketSize.coerceAtLeast(64))
+        val received = usb.bulkTransfer(inEp, response, 0, response.size, 2000)
+        if (received <= 0) {
+            return CommunicationResult(false, "Canon MLC channel-open request sent, but no back-channel response was received.")
+        }
+        val hex = response.copyOf(received).joinToString(" ") { (it.toInt() and 0xFF).toString(16).padStart(2, '0').uppercase() }
+        if (received < 6 || (response[0].toInt() and 0xFF) != 0x00 || (response[1].toInt() and 0xFF) != 0x00) {
+            return CommunicationResult(false, "Canon MLC channel-open response was unexpected: $hex")
+        }
+        return CommunicationResult(true, "channel-open response received ($received bytes): $hex")
     }
 
     private fun readPrinterClassStatus(): String {
