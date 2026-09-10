@@ -1,11 +1,12 @@
 package com.usbprint.app
 
 /**
- * Boundary for a future native SFP/UFR II LT encoder.
+ * Native Canon LBP6030B UFR II LT/SFP engine.
  *
- * The native implementation is deliberately optional. Until a verified
- * LBP6030B-compatible implementation is supplied, this class reports that
- * the engine is unavailable and never sends data to the printer.
+ * The Android JNI layer calls the ARM64 Canon SLIM compressor bundled with
+ * this application, then builds the verified HB/SFP PDL and CMLP channel-1
+ * transport stream. If the native encoder cannot load, this engine fails
+ * closed and never sends an unverified stream to the printer.
  */
 class NativeUfr2Engine : Ufr2Engine {
 
@@ -26,7 +27,7 @@ class NativeUfr2Engine : Ufr2Engine {
             return Ufr2Encoder.Result(
                 success = false,
                 data = null,
-                message = "Native UFR II LT engine is not available yet; no printer data was generated."
+                message = "Native Canon SFP/SLIM encoder could not be loaded; no printer data was generated."
             )
         }
 
@@ -34,7 +35,7 @@ class NativeUfr2Engine : Ufr2Engine {
             ?: return Ufr2Encoder.Result(
                 success = false,
                 data = null,
-                message = "Native UFR II LT engine currently accepts one raster page at a time"
+                message = "Native Canon SFP engine currently accepts one raster page at a time"
             )
 
         return runCatching {
@@ -50,7 +51,7 @@ class NativeUfr2Engine : Ufr2Engine {
             Ufr2Encoder.Result(
                 success = false,
                 data = null,
-                message = "Native UFR II LT encoder failed safely: ${error.javaClass.simpleName}"
+                message = "Native Canon SFP encoder failed safely: ${error.message ?: error.javaClass.simpleName}"
             )
         }
     }
