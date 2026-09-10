@@ -57,43 +57,37 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
     }
 
     fun testCommunication(): CommunicationResult {
-        val currentConnection = connection ?: return CommunicationResult(false, "Printer is not connected.")
-        val currentInterface = printerInterface ?: return CommunicationResult(false, "Printer interface is not available.")
-        val buffer = ByteArray(1)
-        val transferred = currentConnection.controlTransfer(0xA1, 0x01, 0, currentInterface.id, buffer, 1, 1500)
-        if (transferred == 1) {
-            val status = buffer[0].toInt() and 0xFF
-            val selected = (status and 0x10) != 0
-            val noError = (status and 0x08) != 0
-            val paperEmpty = (status and 0x20) != 0
-            return CommunicationResult(true, buildString {
-                append("Printer responded ✓")
-                append("\nUSB status: 0x").append(status.toString(16).padStart(2, '0').uppercase())
-                if (selected) append("\nPrinter online / selected ✓")
-                if (noError) append("\nNo printer error reported ✓")
-                if (paperEmpty) append("\nPaper-out status reported")
-            })
-        }
-        return CommunicationResult(false, "Printer did not respond to the USB Printer Class status request.")
+        val usb = connection ?: return CommunicationResult(false, "Printer is not connected.")
+        val intf = printerInterface ?: return CommunicationResult(false, "Printer interface is not available.")
+        val statusBuffer = ByteArray(1)
+        val transferred = usb.controlTransfer(0xA1, 0x01, 0, intf.id, statusBuffer, 1, 1500)
+        if (transferred != 1) return CommunicationResult(false, "Printer did not respond to the USB Printer Class status request.")
+        val status = statusBuffer[0].toInt() and 0xFF
+        val selected = (status and 0x10) != 0
+        val noError = (status and 0x08) != 0
+        val paperEmpty = (status and 0x20) != 0
+        return CommunicationResult(true, buildString {
+            append("Printer responded ✓")
+            append("\nUSB status: 0x").append(status.toString(16).padStart(2, '0').uppercase())
+            if (selected) append("\nPrinter online / selected ✓")
+            if (noError) append("\nNo printer error reported ✓")
+            if (paperEmpty) append("\nPaper-out status reported")
+        })
     }
 
     fun sendEncodedJob(data: ByteArray, sourceBytes: Long? = null, timeoutMs: Int = DEFAULT_TRANSFER_TIMEOUT_MS): PrintTransferResult {
-        val currentConnection = connection ?: return PrintTransferResult(false, "Printer is not connected.")
+        val usb = connection ?: return PrintTransferResult(false, "Printer is not connected.")
         val endpoint = outEndpoint ?: return PrintTransferResult(false, "Printer bulk OUT endpoint is not available.")
         if (data.isEmpty()) return PrintTransferResult(false, "Encoded printer job is empty.")
         require(timeoutMs > 0) { "USB transfer timeout must be positive" }
 
-        val transport = initializeCanonMlc(currentConnection, endpoint, timeoutMs)
-        if (!transport.success) {
-            return PrintTransferResult(false, "Canon MLC handshake failed. Print stream was NOT sent.\n${transport.message}")
-        }
+        val transport = initializeCanonMlc(usb, endpoint, timeoutMs)
+        if (!transport.success) return PrintTransferResult(false, "Canon MLC handshake failed. Print stream was NOT sent.\n${transport.message}")
 
         var offset = 0
         var frameCount = 0
         while (offset < data.size) {
-            if (data.size - offset < CMLP_HEADER_SIZE) {
-                return PrintTransferResult(false, "Invalid Canon CMLP stream: truncated frame header at byte $offset.", offset)
-            }
+            if (data.size - offset < CMLP_HEADER_SIZE) return PrintTransferResult(false, "Invalid Canon CMLP stream: truncated frame header at byte $offset.", offset)
             if ((data[offset].toInt() and 0xFF) != 0x01 || (data[offset + 1].toInt() and 0xFF) != 0x10) {
                 return PrintTransferResult(false, "Invalid Canon CMLP stream: expected channel-1 frame at byte $offset.", offset)
             }
@@ -104,11 +98,11 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
             if ((data[offset + 4].toInt() and 0xFF) != 0x01 || (data[offset + 5].toInt() and 0xFF) != 0x00) {
                 return PrintTransferResult(false, "Invalid Canon channel-1 frame flags at byte $offset.", offset)
             }
-            val transferred = currentConnection.bulkTransfer(endpoint, data, offset, frameLength, timeoutMs)
-            if (transferred != frameLength) {
-                return PrintTransferResult(false, "Canon USB transfer stopped in frame ${frameCount + 1}: expected $frameLength bytes, sent $transferred.", offset + transferred.coerceAtLeast(0))
+            val sent = usb.bulkTransfer(endpoint, data, offset, frameLength, timeoutMs)
+            if (sent != frameLength) {
+                return PrintTransferResult(false, "Canon USB transfer stopped in frame ${frameCount + 1}: expected $frameLength bytes, sent $sent.", offset + sent.coerceAtLeast(0))
             }
-            offset += transferred
+            offset += sent
             frameCount++
         }
 
@@ -128,19 +122,25 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
     }
 
     private fun initializeCanonMlc(usb: UsbDeviceConnection, endpoint: UsbEndpoint, timeoutMs: Int): CommunicationResult {
-        val inEp = inEndpoint
-            ?: return CommunicationResult(false, "Canon MLC initialization requires the printer IN endpoint, but none was found.")
+        val inEp = inEndpoint ?: return CommunicationResult(false, "Canon MLC initialization requires the printer IN endpoint, but none was found.")
+        val intf = printerInterface ?: return CommunicationResult(false, "Canon MLC initialization requires the printer interface.")
 
-        // Linux usblp keeps a bulk-IN read pending before it writes the first
-        // Canon port-init bytes. Reproduce that ordering on Android.
-        val initRequest = UsbRequest()
-        val initBuffer = ByteBuffer.allocate(9)
-        if (!initRequest.initialize(usb, inEp)) {
-            return CommunicationResult(false, "Could not initialize Android UsbRequest on the Canon IN endpoint.")
+        // Mirror the information Linux usblp obtains before opening the data path.
+        val deviceId = readDeviceId(usb, intf.id)
+        if (deviceId != null) {
+            val preview = deviceId.take(180)
+            // Do not fail on Device ID formatting; some printers return a short or vendor-specific ID.
+            deviceIdLog = preview
         }
-        if (!initRequest.queue(initBuffer, 9)) {
+
+        // Linux usblp keeps a bulk-IN URB pending before writing Canon port-init data.
+        // Use a full 1024-byte buffer so a packet/framing variant is not truncated to 9 bytes.
+        val initRequest = UsbRequest()
+        val initBuffer = ByteBuffer.allocate(1024)
+        if (!initRequest.initialize(usb, inEp)) return CommunicationResult(false, "Could not initialize Android UsbRequest on the Canon IN endpoint.")
+        if (!initRequest.queue(initBuffer, initBuffer.capacity())) {
             initRequest.close()
-            return CommunicationResult(false, "Could not pre-arm the Canon 9-byte initialization response read.")
+            return CommunicationResult(false, "Could not pre-arm the Canon bulk-IN initialization read.")
         }
 
         val init = byteArrayOf(0x00, 0x00, 0x00, 0x08, 0x01, 0x00, 0x00, 0x08)
@@ -156,48 +156,37 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
         val initHex = initResponse?.joinToString(" ") { hexByte(it) }
         val initValid = initResponse?.let { response ->
             response.size == 9 &&
-                (response[0].toInt() and 0xFF) == 0x00 &&
-                (response[1].toInt() and 0xFF) == 0x00 &&
-                (((response[2].toInt() and 0xFF) shl 8) or (response[3].toInt() and 0xFF)) == 9 &&
-                (response[6].toInt() and 0xFF) == 0x80 &&
-                (response[7].toInt() and 0xFF) == 0x00 &&
-                (response[8].toInt() and 0xFF) == 0x08
+                u8(response[0]) == 0x00 && u8(response[1]) == 0x00 &&
+                (((u8(response[2]) shl 8) or u8(response[3])) == 9) &&
+                u8(response[6]) == 0x80 && u8(response[7]) == 0x00 && u8(response[8]) == 0x08
         } == true
-
         if (!initValid) {
-            return CommunicationResult(false, "Canon initialization response was not the required 9-byte packet${initHex?.let { ": [$it]" } ?: ""}.")
+            val detail = if (initResponse == null) "; no bulk-IN completion observed" else ": [$initHex]"
+            return CommunicationResult(false, buildString {
+                append("Canon initialization response was not the required 9-byte packet")
+                append(detail)
+                if (deviceIdLog != null) append("\nGET_DEVICE_ID: ").append(deviceIdLog)
+            })
         }
 
-        val requestPayload = byteArrayOf(
-            0x01, 0x01, 0x10,
-            0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(),
-            0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()
-        )
+        val requestPayload = byteArrayOf(0x01, 0x01, 0x10, 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte())
         val frameLength = requestPayload.size + CMLP_HEADER_SIZE
         val request = ByteArray(frameLength)
-        request[0] = 0x00
-        request[1] = 0x00
-        request[2] = ((frameLength ushr 8) and 0xFF).toByte()
-        request[3] = (frameLength and 0xFF).toByte()
-        request[4] = 0x01
-        request[5] = 0x00
+        request[0] = 0x00; request[1] = 0x00
+        request[2] = ((frameLength ushr 8) and 0xFF).toByte(); request[3] = (frameLength and 0xFF).toByte()
+        request[4] = 0x01; request[5] = 0x00
         System.arraycopy(requestPayload, 0, request, CMLP_HEADER_SIZE, requestPayload.size)
 
-        // Again pre-arm IN before sending the channel-open request.
         val openRequest = UsbRequest()
-        val openBuffer = ByteBuffer.allocate(12)
-        if (!openRequest.initialize(usb, inEp)) {
-            return CommunicationResult(false, "Could not initialize Android UsbRequest for the Canon channel-open response.")
-        }
-        if (!openRequest.queue(openBuffer, 12)) {
+        val openBuffer = ByteBuffer.allocate(1024)
+        if (!openRequest.initialize(usb, inEp)) return CommunicationResult(false, "Could not initialize Android UsbRequest for the Canon channel-open response.")
+        if (!openRequest.queue(openBuffer, openBuffer.capacity())) {
             openRequest.close()
-            return CommunicationResult(false, "Could not pre-arm the Canon 12-byte channel-open response read.")
+            return CommunicationResult(false, "Could not pre-arm the Canon channel-open bulk-IN read.")
         }
-
         val requestSent = usb.bulkTransfer(endpoint, request, 0, request.size, timeoutMs)
         if (requestSent != request.size) {
-            openRequest.cancel()
-            openRequest.close()
+            openRequest.cancel(); openRequest.close()
             return CommunicationResult(false, "Canon MLC channel-open request failed: sent $requestSent/${request.size} bytes.")
         }
 
@@ -205,35 +194,38 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
         openRequest.close()
         val payload = rawResponse?.let { extractCmlpPayload(it) }
         val rawHex = rawResponse?.joinToString(" ") { hexByte(it) }
-        val payloadHex = payload?.joinToString(" ") { hexByte(it) }
-        val openValid = payload?.let {
-            it.size == 12 &&
-                (it[0].toInt() and 0xFF) == 0x81 &&
-                (it[1].toInt() and 0xFF) == 0x00 &&
-                (it[2].toInt() and 0xFF) == 0x01 &&
-                (it[3].toInt() and 0xFF) == 0x10
+        val openValid = payload?.let { p ->
+            p.size >= 8 && u8(p[0]) == 0x81 && u8(p[1]) == 0x00 && u8(p[2]) == 0x01 && u8(p[3]) == 0x10
         } == true
-
         if (openValid) {
-            val sendSize = ((payload!![4].toInt() and 0xFF) shl 8) or (payload[5].toInt() and 0xFF)
-            val recvSize = ((payload[6].toInt() and 0xFF) shl 8) or (payload[7].toInt() and 0xFF)
-            if (sendSize > 6) {
-                return CommunicationResult(true, "Canon MLC handshake valid ✓ (init=9-byte valid, channel-open response valid; send=$sendSize, recv=$recvSize)")
-            }
+            val sendSize = (u8(payload!![4]) shl 8) or u8(payload[5])
+            val recvSize = (u8(payload[6]) shl 8) or u8(payload[7])
+            if (sendSize > 6) return CommunicationResult(true, "Canon MLC handshake valid ✓ (init=9-byte valid, channel-open response valid; send=$sendSize, recv=$recvSize)${deviceIdLog?.let { ", Device ID received" } ?: ""}")
         }
-
         return CommunicationResult(false, buildString {
-            append("Canon channel-open response was not the required 12-byte packet")
+            append("Canon channel-open response was not the required response")
             if (rawHex != null) append(" [$rawHex]") else append("; no response observed")
-            if (payloadHex != null) append("; payload [$payloadHex]")
+            if (deviceIdLog != null) append("\nGET_DEVICE_ID: ").append(deviceIdLog)
         })
+    }
+
+    private var deviceIdLog: String? = null
+
+    private fun readDeviceId(usb: UsbDeviceConnection, interfaceId: Int): String? {
+        val buffer = ByteArray(1024)
+        val n = usb.controlTransfer(0xA1, 0x00, 0, interfaceId, buffer, buffer.size, 1500)
+        if (n < 2) return null
+        val declared = (u8(buffer[0]) shl 8) or u8(buffer[1])
+        val count = minOf(n, declared.coerceAtLeast(2))
+        if (count <= 2) return null
+        return runCatching { String(buffer, 2, count - 2, Charsets.US_ASCII).trim() }.getOrNull()
     }
 
     private fun waitForQueuedResponse(usb: UsbDeviceConnection, request: UsbRequest, buffer: ByteBuffer, timeoutMs: Long): ByteArray? {
         return try {
-            val completed = usb.requestWait(timeoutMs)
+            val completed = usb.requestWait(timeoutMs) ?: return null
             if (completed !== request) return null
-            val count = buffer.position()
+            val count = buffer.position().coerceAtMost(buffer.capacity())
             if (count <= 0) return null
             buffer.flip()
             val result = ByteArray(count)
@@ -246,24 +238,20 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
     }
 
     private fun extractCmlpPayload(raw: ByteArray): ByteArray {
-        if (raw.size >= CMLP_HEADER_SIZE) {
-            val totalLength = ((raw[2].toInt() and 0xFF) shl 8) or (raw[3].toInt() and 0xFF)
-            if ((raw[0].toInt() and 0xFF) == 0x00 &&
-                (raw[1].toInt() and 0xFF) == 0x00 &&
-                totalLength >= CMLP_HEADER_SIZE &&
-                totalLength <= raw.size
-            ) return raw.copyOfRange(CMLP_HEADER_SIZE, totalLength)
+        if (raw.size >= CMLP_HEADER_SIZE && u8(raw[0]) == 0x00 && u8(raw[1]) == 0x00) {
+            val totalLength = (u8(raw[2]) shl 8) or u8(raw[3])
+            if (totalLength >= CMLP_HEADER_SIZE && totalLength <= raw.size) return raw.copyOfRange(CMLP_HEADER_SIZE, totalLength)
         }
         return raw
     }
 
     private fun readPrinterClassStatus(): String {
-        val currentConnection = connection ?: return "USB Printer Class status: unavailable"
-        val currentInterface = printerInterface ?: return "USB Printer Class status: unavailable"
+        val usb = connection ?: return "USB Printer Class status: unavailable"
+        val intf = printerInterface ?: return "USB Printer Class status: unavailable"
         val buffer = ByteArray(1)
-        val n = currentConnection.controlTransfer(0xA1, 0x01, 0, currentInterface.id, buffer, 1, 1000)
+        val n = usb.controlTransfer(0xA1, 0x01, 0, intf.id, buffer, 1, 1000)
         if (n != 1) return "USB Printer Class status: no response"
-        return formatPrinterStatus(buffer[0].toInt() and 0xFF)
+        return formatPrinterStatus(u8(buffer[0]))
     }
 
     private fun formatPrinterStatus(status: Int): String {
@@ -279,10 +267,10 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
     }
 
     private fun readImmediatePrinterResponse(): String {
-        val currentConnection = connection ?: return "IN endpoint response: unavailable"
+        val usb = connection ?: return "IN endpoint response: unavailable"
         val endpoint = inEndpoint ?: return "IN endpoint response: unavailable"
-        val buffer = ByteArray(endpoint.maxPacketSize.coerceAtLeast(64))
-        val n = currentConnection.bulkTransfer(endpoint, buffer, 0, buffer.size, 1000)
+        val buffer = ByteArray(endpoint.maxPacketSize.coerceAtLeast(512))
+        val n = usb.bulkTransfer(endpoint, buffer, 0, buffer.size, 1000)
         return when {
             n > 0 -> "IN endpoint response: $n byte(s) ${buffer.copyOf(n).joinToString(" ") { hexByte(it) }}"
             n == 0 -> "IN endpoint response: empty"
@@ -291,14 +279,15 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
     }
 
     fun close() {
-        val currentConnection = connection
-        val currentInterface = printerInterface
-        if (currentConnection != null && currentInterface != null) runCatching { currentConnection.releaseInterface(currentInterface) }
-        runCatching { currentConnection?.close() }
+        val usb = connection
+        val intf = printerInterface
+        if (usb != null && intf != null) runCatching { usb.releaseInterface(intf) }
+        runCatching { usb?.close() }
         connection = null
         printerInterface = null
         outEndpoint = null
         inEndpoint = null
+        deviceIdLog = null
     }
 
     val isOpen: Boolean get() = connection != null && outEndpoint != null
@@ -308,7 +297,8 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
         bytes < 1024 * 1024 -> "%.1f KB".format(bytes / 1024.0)
         else -> "%.2f MB".format(bytes / (1024.0 * 1024.0))
     }
-    private fun hexByte(value: Byte): String = (value.toInt() and 0xFF).toString(16).padStart(2, '0').uppercase()
+    private fun hexByte(value: Byte): String = u8(value).toString(16).padStart(2, '0').uppercase()
+    private fun u8(value: Byte): Int = value.toInt() and 0xFF
 
     companion object {
         private const val CMLP_HEADER_SIZE = 6
