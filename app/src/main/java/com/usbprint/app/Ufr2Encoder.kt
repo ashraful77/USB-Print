@@ -3,38 +3,21 @@ package com.usbprint.app
 import java.io.ByteArrayOutputStream
 
 /**
- * Portable reconstruction of Canon's Linux 5.10 SFP/HB path for LBP6030B.
+ * Canon LBP6030B UFR II LT / SFP HB encoder.
  *
- * Important: the extracted libcanonncapr binary shows that cnpkSendData does
- * NOT prepend CD CA 10 to the HB data path. For every 0x1000-byte block it
- * calls cnprocWriteCommand(0x07, ..., 0x1000), and cnprocWriteCommand builds
- * a little-endian [command:u16][length:u16][payload] record. The physical
- * libcomm_usbmlportr jobWrite path then puts that record into CMLP channel 1.
+ * Canon's Linux 5.10 source shows that cnpkSendData's command 0x07 is only
+ * an internal command between the filter process and cnpkmodule. The module
+ * passes the actual PDL bytes to Info_commJobWrite. libcomm_usbmlportr then
+ * wraps each jobWrite block in the CMLP channel-1 transport frame.
  */
 class Ufr2Encoder(
     private val profile: Ufr2PrinterProfile = Ufr2PrinterProfile.LBP6030B
 ) {
     companion object {
-        private const val COMMAND_DATA = 0x07
-        private const val COMMAND_FLUSH = 0x08
         private const val COMMAND_CHUNK = 0x1000
         private const val STRIPE_LINES = 256
 
-        /** Exact record made by Canon's buftool_write_short/write path. */
-        private fun buildCommandRecord(command: Int, payload: ByteArray = ByteArray(0)): ByteArray {
-            require(command in 0..0xFFFF)
-            require(payload.size <= 0xFFFF)
-            return ByteArray(4 + payload.size).also { out ->
-                // buftool_write_short writes native little-endian shorts.
-                out[0] = (command and 0xFF).toByte()
-                out[1] = ((command ushr 8) and 0xFF).toByte()
-                out[2] = (payload.size and 0xFF).toByte()
-                out[3] = ((payload.size ushr 8) and 0xFF).toByte()
-                if (payload.isNotEmpty()) System.arraycopy(payload, 0, out, 4, payload.size)
-            }
-        }
-
-        /** Exact CMLP channel-1 frame from libcomm_usbmlportr SendSub2. */
+        /** Exact CMLP channel-1 frame emitted by libcomm_usbmlportr. */
         private fun buildCmlpFrame(payload: ByteArray): ByteArray {
             val totalLength = payload.size + 6
             require(totalLength <= 0xFFFF)
@@ -49,15 +32,12 @@ class Ufr2Encoder(
             }
         }
 
-        private fun appendCommand(out: ByteArrayOutputStream, command: Int, payload: ByteArray = ByteArray(0)) {
-            out.write(buildCmlpFrame(buildCommandRecord(command, payload)))
-        }
-
-        private fun appendPdl(out: ByteArrayOutputStream, block: ByteArray) {
+        /** Canon's cnpkSendData ultimately supplies raw PDL in 4096-byte blocks. */
+        private fun appendRawPdl(out: ByteArrayOutputStream, data: ByteArray) {
             var offset = 0
-            while (offset < block.size) {
-                val count = minOf(COMMAND_CHUNK, block.size - offset)
-                appendCommand(out, COMMAND_DATA, block.copyOfRange(offset, offset + count))
+            while (offset < data.size) {
+                val count = minOf(COMMAND_CHUNK, data.size - offset)
+                out.write(buildCmlpFrame(data.copyOfRange(offset, offset + count)))
                 offset += count
             }
         }
@@ -184,36 +164,29 @@ class Ufr2Encoder(
         val bytesPerLine = (page.width + 3) / 4
         val stream = ByteArrayOutputStream()
 
-        appendPdl(stream, beginJob(job.dpi))
-        appendPdl(stream, beginMedia())
-        appendPdl(stream, setPaperSource())
-        appendPdl(stream, beginPage(page.width, page.height))
-        appendPdl(stream, prepareHalftone())
+        appendRawPdl(stream, beginJob(job.dpi))
+        appendRawPdl(stream, beginMedia())
+        appendRawPdl(stream, setPaperSource())
+        appendRawPdl(stream, beginPage(page.width, page.height))
+        appendRawPdl(stream, prepareHalftone())
 
         var lineStart = 0
         while (lineStart < page.height) {
             val lines = minOf(STRIPE_LINES, page.height - lineStart)
             val dataLength = bytesPerLine * lines
-            appendPdl(stream, transferHeader(page.width, lines, dataLength))
+            appendRawPdl(stream, transferHeader(page.width, lines, dataLength))
             val start = lineStart * bytesPerLine
-            var offset = 0
-            while (offset < dataLength) {
-                val count = minOf(COMMAND_CHUNK, dataLength - offset)
-                appendCommand(stream, COMMAND_DATA, twoBit.copyOfRange(start + offset, start + offset + count))
-                offset += count
-            }
+            val end = start + dataLength
+            appendRawPdl(stream, twoBit.copyOfRange(start, end))
             lineStart += lines
         }
 
-        appendPdl(stream, byteArrayOf(0x13))
-        appendPdl(stream, byteArrayOf(0x12))
-        appendPdl(stream, byteArrayOf(0x11))
-
-        // cnpkSendData's flush path uses command 0x08 with an empty payload.
-        appendCommand(stream, COMMAND_FLUSH)
+        appendRawPdl(stream, byteArrayOf(0x13))
+        appendRawPdl(stream, byteArrayOf(0x12))
+        appendRawPdl(stream, byteArrayOf(0x11))
 
         val result = stream.toByteArray()
-        Result(true, result, "Canon LBP6030B HB command/CMLP stream: ${result.size} bytes, ${page.width}x${page.height} @ ${job.dpi} DPI")
+        Result(true, result, "Canon LBP6030B HB raw-PDL/CMLP stream: ${result.size} bytes, ${page.width}x${page.height} @ ${job.dpi} DPI")
     }.getOrElse { error ->
         Result(false, null, "Canon HB encoder failed: ${error.message ?: error.javaClass.simpleName}")
     }
