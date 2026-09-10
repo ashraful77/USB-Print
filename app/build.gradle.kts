@@ -5,19 +5,28 @@ plugins {
     id("com.android.application")
 }
 
-// The Canon ARM64 SLIM compressor is kept as compressed text so the repository
-// remains source-friendly. It is reconstructed into jniLibs before native merge.
+// The Canon ARM64 SLIM compressor is stored as four text chunks so it can be
+// kept in the repository through the text-only GitHub contents API. Gradle
+// reconstructs the original gzip payload before the native merge step.
 val unpackCanonSlim = tasks.register("unpackCanonSlim") {
-    val encoded = layout.projectDirectory.file("src/main/canon_slimsfp.so.gz.b64").asFile
+    val sourceDir = layout.projectDirectory.dir("src/main").asFile
+    val chunks = fileTree(sourceDir) {
+        include("canon_slimsfp.*.b64")
+    }.files.sortedBy { it.name }
     val output = layout.projectDirectory.file("src/main/jniLibs/arm64-v8a/libcanon_slimsfp.so").asFile
-    inputs.file(encoded)
+    inputs.files(chunks)
     outputs.file(output)
     doLast {
+        require(chunks.size == 4) { "Canon SLIM payload is incomplete: expected 4 chunks, found ${chunks.size}" }
         output.parentFile.mkdirs()
-        val compressed = Base64.getDecoder().decode(encoded.readText().trim())
+        val encoded = buildString {
+            chunks.forEach { append(it.readText().trim()) }
+        }
+        val compressed = Base64.getDecoder().decode(encoded)
         GZIPInputStream(compressed.inputStream()).use { input ->
             output.outputStream().use { out -> input.copyTo(out) }
         }
+        require(output.length() > 30000) { "Reconstructed Canon SLIM library is unexpectedly small" }
     }
 }
 
