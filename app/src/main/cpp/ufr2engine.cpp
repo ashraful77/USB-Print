@@ -142,6 +142,8 @@ NativeResult encode(const jbyte* raster, int width, int height, int dpi) {
         const auto twoBit = oneBitToTwoBit(raster, width, height);
         const int srcBpr = (width + 3) / 4, stripes = (height + 255) / 256;
         std::vector<Byte> pdl;
+        std::ostringstream diag;
+        diag << "SLC diag params=[3,9,6,1,0,0,80], bands=" << stripes;
         auto add = [&](const std::vector<Byte>& b) { pdl.insert(pdl.end(), b.begin(), b.end()); };
         add(beginJob(dpi)); add(beginMedia()); add(paperSource()); add(beginPage()); add(prepare());
         for (int band = 0; band < stripes; ++band) {
@@ -154,6 +156,15 @@ NativeResult encode(const jbyte* raster, int width, int height, int dpi) {
             CompParam param = CANON_SLC_PARAMS;
             const int compressedLen = comp(input.data(), compressed.data(), srcBpr, lines, capacity, 2, &encodedLines, &param, 2, nullptr);
             if (compressedLen <= 0 || compressedLen > capacity || encodedLines <= 0 || encodedLines > lines) { dlclose(handle); return {false, {}, "Canon SLIM compression returned an invalid result"}; }
+            if (band < 3 || band == stripes - 1) {
+                diag << " b" << band << "(" << lines << "/" << encodedLines << "/" << compressedLen << ":";
+                const int sample = std::min(8, compressedLen);
+                for (int i = 0; i < sample; ++i) { if (i) diag << ','; diag << std::hex << static_cast<int>(compressed[i] & 0xff); }
+                diag << std::dec << ")";
+                LOGE("SLC band=%d lines=%d encoded=%d compressed=%d first8=%02x %02x %02x %02x %02x %02x %02x %02x params=03 09 06 01 00 00 50 00", band, lines, encodedLines, compressedLen,
+                     compressedLen > 0 ? compressed[0] : 0, compressedLen > 1 ? compressed[1] : 0, compressedLen > 2 ? compressed[2] : 0, compressedLen > 3 ? compressed[3] : 0,
+                     compressedLen > 4 ? compressed[4] : 0, compressedLen > 5 ? compressed[5] : 0, compressedLen > 6 ? compressed[6] : 0, compressedLen > 7 ? compressed[7] : 0);
+            }
             std::vector<Byte> slc;
             slc.reserve(static_cast<size_t>(compressedLen) + 18);
             slc.push_back(param.xOffset[0]); slc.push_back(param.xOffset[1]); slc.push_back(param.yOffset[0]); slc.push_back(param.yOffset[1]);
@@ -169,7 +180,7 @@ NativeResult encode(const jbyte* raster, int width, int height, int dpi) {
         add(std::vector<Byte>{0x13}); add(std::vector<Byte>{0x12}); add(std::vector<Byte>{0x11});
         std::vector<Byte> framed; framed.reserve(pdl.size() + pdl.size() / 4096 * 16 + 16); appendCmlpFrames(framed, pdl);
         dlclose(handle);
-        std::ostringstream msg; msg << "Canon LBP6030B SFP/SLIM stream: " << framed.size() << " bytes; PDL " << pdl.size() << " bytes; " << width << "x" << height << " @ " << dpi << " DPI; SLC params 3,9,6,1,0,0,80";
+        std::ostringstream msg; msg << "Canon LBP6030B SFP/SLIM stream: " << framed.size() << " bytes; PDL " << pdl.size() << " bytes; " << width << "x" << height << " @ " << dpi << " DPI; " << diag.str();
         return {true, std::move(framed), msg.str()};
     } catch (const std::exception& e) { dlclose(handle); return {false, {}, std::string("Native Canon encoder failed: ") + e.what()}; }
 }
