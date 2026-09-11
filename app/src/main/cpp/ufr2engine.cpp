@@ -36,15 +36,15 @@ void frames(std::vector<Byte>&o,const std::vector<Byte>&p){for(size_t i=0;i<p.si
 NativeResult encode(const jbyte*r,int w,int h,int dpi){
  if(!r||w!=W||h!=H||dpi!=600)return {false,{},"Canon LBP6030B requires 4958x7016 at 600 DPI"};
  void*lib=dlopen("libcanon_slimsfp.so",RTLD_NOW|RTLD_LOCAL);if(!lib){const char*x=dlerror();return {false,{},std::string("Cannot load Canon SLIM library: ")+(x?x:"unknown")};}
- auto comp=reinterpret_cast<SlimCompFn>(dlsym(lib,"lCaptCompEx2"));if(!comp){const char*x=dlerror();dlclose(lib);return {false,{},std::string("Canon SLIM lCaptCompEx2 unavailable: ")+(x?x:"unknown")};}
+ auto comp=reinterpret_cast<SlimCompFn>(dlsym(lib,"lCaptCompEx"));if(!comp){const char*x=dlerror();dlclose(lib);return {false,{},std::string("Canon SLIM lCaptCompEx unavailable: ")+(x?x:"unknown")};}
  try{
   auto input=to2(r);int bpr=(W+3)/4;int cap=(int)std::min<size_t>(input.size()*2ull+4096ull,0x7fffffff);std::vector<Byte>z((size_t)cap);int lines=0;CompParam p=PARAM;
   int n=comp(input.data(),z.data(),bpr,H,cap,2,&lines,&p,2,nullptr);
-  LOGE("SLC Ex2 whole-page lines=%d compressed=%d params=03 09 06 01 00 00 50 00 first=%02x %02x %02x %02x %02x %02x %02x %02x",lines,n,z[0],z[1],z[2],z[3],z[4],z[5],z[6],z[7]);
-  if(n<=0||n>cap||lines<=0||lines>H){dlclose(lib);return {false,{},"Canon SLIM reference-aware compression returned an invalid result"};}
+  LOGE("SLC Ex whole-page lines=%d compressed=%d params=03 09 06 01 00 00 50 00 first=%02x %02x %02x %02x %02x %02x %02x %02x",lines,n,z[0],z[1],z[2],z[3],z[4],z[5],z[6],z[7]);
+  if(n<=0||n>cap||lines<=0||lines>H){dlclose(lib);return {false,{},"Canon SLIM basic compression returned an invalid result"};}
   std::vector<Byte>pdl;auto add=[&](const std::vector<Byte>&v){pdl.insert(pdl.end(),v.begin(),v.end());};add(job(dpi));add(media());add(std::vector<Byte>{0x51,0xF2,0});add(page());add(std::vector<Byte>{0x61,0xE6,0x80,2,0xE5,0});
   std::vector<Byte>s;s.reserve((size_t)n+18);s.push_back(p.xOffset[0]);s.push_back(p.xOffset[1]);s.push_back(p.yOffset[0]);s.push_back(p.yOffset[1]);s.push_back((Byte)p.zOffset[0]);s.push_back((Byte)p.zOffset[1]);s.push_back((Byte)p.farOffset);s.push_back((Byte)(p.farOffset>>8));s.push_back(1);p32le(s,n+4);s.insert(s.end(),z.begin(),z.begin()+n);ap(s,{0xBD,0x3C,0xDC,0x80,0});add(header(lines,(int)s.size()));add(s);add(std::vector<Byte>{0x13,0x12,0x11});std::vector<Byte>out;out.reserve(pdl.size()+pdl.size()/4096*8+16);frames(out,pdl);dlclose(lib);
-  std::ostringstream m;m<<"Canon LBP6030B SFP/SLIM stream: "<<out.size()<<" bytes; PDL "<<pdl.size()<<" bytes; "<<W<<"x"<<H<<" @ 600 DPI; Ex2 whole-page compression; encodedLines="<<lines<<"; compressed="<<n<<"; params=[3,9,6,1,0,0,80]; first8=";for(int i=0;i<8&&i<n;i++){if(i)m<<",";m<<std::hex<<(int)z[i];}return {true,std::move(out),m.str()};
+  std::ostringstream m;m<<"Canon LBP6030B SFP/SLIM stream: "<<out.size()<<" bytes; PDL "<<pdl.size()<<" bytes; "<<W<<"x"<<H<<" @ 600 DPI; Ex whole-page compression; encodedLines="<<lines<<"; compressed="<<n<<"; params=[3,9,6,1,0,0,80]; first8=";for(int i=0;i<8&&i<n;i++){if(i)m<<",";m<<std::hex<<(int)z[i];}return {true,std::move(out),m.str()};
  }catch(const std::exception&e){dlclose(lib);return {false,{},std::string("Native Canon encoder failed: ")+e.what()};}
 }
 }
