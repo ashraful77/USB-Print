@@ -15,6 +15,7 @@ using Byte = uint8_t;
 struct NativeResult { bool ok; std::vector<Byte> data; std::string message; };
 constexpr int W=4958, H=7016;
 constexpr int STRIPE_LINES=256;
+constexpr size_t CMLP_PAYLOAD=8192;
 
 jobject result(JNIEnv* e,const NativeResult& r){jclass c=e->FindClass("com/usbprint/app/Ufr2Encoder$Result");if(!c)return nullptr;jmethodID m=e->GetMethodID(c,"<init>","(Z[BLjava/lang/String;)V");if(!m)return nullptr;jbyteArray a=nullptr;if(r.ok){a=e->NewByteArray((jsize)r.data.size());if(!a)return nullptr;if(!r.data.empty())e->SetByteArrayRegion(a,0,(jsize)r.data.size(),reinterpret_cast<const jbyte*>(r.data.data()));}jstring s=e->NewStringUTF(r.message.c_str());jobject o=e->NewObject(c,m,(jboolean)r.ok,a,s);if(a)e->DeleteLocalRef(a);e->DeleteLocalRef(s);return o;}
 void p16(std::vector<Byte>&o,int v){o.push_back((Byte)(v>>8));o.push_back((Byte)v);}
@@ -26,7 +27,7 @@ std::vector<Byte> page(){return {3,0xE7,0x85,(Byte)(W>>8),(Byte)W,(Byte)(H>>8),(
 std::vector<Byte> header(int lines,int n){std::vector<Byte>o;ap(o,{0x62,0xE3,0x85});p16(o,W);p16(o,lines);ap(o,{0xE8,0xA5});p16(o,W);p16(o,lines);ap(o,{0xE1,0,0xD7});if(n<=0xFFFF){ap(o,{0x84});p16(o,n);ap(o,{0x9D});p16(o,n);}else{ap(o,{0x88});p32be(o,n);ap(o,{0x9E});p32be(o,n);}return o;}
 std::vector<Byte> to2(const jbyte*r){int sb=(W+7)/8,db=(W+3)/4;std::vector<Byte>o((size_t)db*H);for(int y=0;y<H;y++){const Byte*s=(const Byte*)r+(size_t)y*sb;Byte*d=o.data()+(size_t)y*db;for(int x=0;x<W;x++){int v=((s[x>>3]>>(7-(x&7)))&1)?0:3;d[x>>2]|=(Byte)(v<<(6-2*(x&3)));}}return o;}
 void cmlp(std::vector<Byte>&o,const Byte*p,size_t n){size_t t=n+6;if(t>0xffff)throw std::runtime_error("CMLP frame too large");o.push_back(1);o.push_back(0x10);o.push_back(t>>8);o.push_back(t);o.push_back(1);o.push_back(0);o.insert(o.end(),p,p+n);}
-void frames(std::vector<Byte>&o,const std::vector<Byte>&p){for(size_t i=0;i<p.size();){size_t n=std::min<size_t>(4096,p.size()-i);cmlp(o,p.data()+i,n);i+=n;}static const Byte f[]={8,0,0,0};cmlp(o,f,4);}
+void frames(std::vector<Byte>&o,const std::vector<Byte>&p){for(size_t i=0;i<p.size();){size_t n=std::min(CMLP_PAYLOAD,p.size()-i);cmlp(o,p.data()+i,n);i+=n;}static const Byte f[]={8,0,0,0};cmlp(o,f,4);}
 
 NativeResult encode(const jbyte*r,int w,int h,int dpi){
  if(!r||w!=W||h!=H||dpi!=600)return {false,{},"Canon LBP6030B requires 4958x7016 at 600 DPI"};
@@ -41,8 +42,8 @@ NativeResult encode(const jbyte*r,int w,int h,int dpi){
    size_t start=(size_t)lineStart*bpr;pdl.insert(pdl.end(),input.begin()+start,input.begin()+start+n);bands++;
   }
   add(std::vector<Byte>{0x13,0x12,0x11});
-  std::vector<Byte>out;out.reserve(pdl.size()+pdl.size()/4096*8+16);frames(out,pdl);
-  std::ostringstream m;m<<"Canon LBP6030B HB raw 2-bit stream: "<<out.size()<<" bytes; PDL "<<pdl.size()<<" bytes; "<<W<<"x"<<H<<" @ 600 DPI; raw 2-bit, 256-line bands="<<bands<<"; raster2="<<input.size()<<" bytes; CMLP payload=4096";
+  std::vector<Byte>out;out.reserve(pdl.size()+pdl.size()/CMLP_PAYLOAD*8+16);frames(out,pdl);
+  std::ostringstream m;m<<"Canon LBP6030B HB raw 2-bit stream: "<<out.size()<<" bytes; PDL "<<pdl.size()<<" bytes; "<<W<<"x"<<H<<" @ 600 DPI; raw 2-bit, 256-line bands="<<bands<<"; raster2="<<input.size()<<" bytes; CMLP payload=8192 (matches MLC recv/send size)";
   return {true,std::move(out),m.str()};
  }catch(const std::exception&e){return {false,{},std::string("Native Canon raw encoder failed: ")+e.what()};}
 }
