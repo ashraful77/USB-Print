@@ -46,7 +46,16 @@ class Ufr2PrintPipeline(
         }
 
         val transfer = usbConnection.sendEncodedJob(encoded.data, sourceBytes = sourceBytes)
-        return Result(transfer.success, transfer.message)
+        return Result(
+            transfer.success,
+            buildString {
+                append(transfer.message)
+                if (encoded.message.isNotBlank()) {
+                    append("\n\nEncoder diagnostics:\n")
+                    append(encoded.message)
+                }
+            }
+        )
     }
 
     data class Result(val success: Boolean, val message: String)
