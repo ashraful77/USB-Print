@@ -5,19 +5,19 @@ import java.io.ByteArrayOutputStream
 /**
  * Canon LBP6030B UFR II LT / SFP HB encoder.
  *
- * Canon's Linux 5.10 source shows that cnpkSendData's command 0x07 is only
- * an internal command between the filter process and cnpkmodule. The module
- * passes the actual PDL bytes to Info_commJobWrite. libcomm_usbmlportr then
- * wraps each jobWrite block in the CMLP channel-1 transport frame.
+ * #123 keeps the #121 USB/MLC/CMLP transport and raster unchanged, but tests
+ * the raw HB PDL with the entire raster emitted as one transfer block rather
+ * than 28 x 256-line transfer blocks. This isolates band continuation/header
+ * handling from the transport layer.
  */
 class Ufr2Encoder(
     private val profile: Ufr2PrinterProfile = Ufr2PrinterProfile.LBP6030B
 ) {
     companion object {
         private const val COMMAND_CHUNK = 0x1000
-        private const val STRIPE_LINES = 256
+        // #123: one transfer block for the complete Canon A4 raster.
+        private const val STRIPE_LINES = 7016
 
-        /** Exact CMLP channel-1 frame emitted by libcomm_usbmlportr. */
         private fun buildCmlpFrame(payload: ByteArray): ByteArray {
             val totalLength = payload.size + 6
             require(totalLength <= 0xFFFF)
@@ -32,7 +32,6 @@ class Ufr2Encoder(
             }
         }
 
-        /** Canon's cnpkSendData ultimately supplies raw PDL in 4096-byte blocks. */
         private fun appendRawPdl(out: ByteArrayOutputStream, data: ByteArray) {
             var offset = 0
             while (offset < data.size) {
@@ -186,7 +185,7 @@ class Ufr2Encoder(
         appendRawPdl(stream, byteArrayOf(0x11))
 
         val result = stream.toByteArray()
-        Result(true, result, "Canon LBP6030B HB raw-PDL/CMLP stream: ${result.size} bytes, ${page.width}x${page.height} @ ${job.dpi} DPI")
+        Result(true, result, "Canon LBP6030B HB raw 2-bit WHOLE-PAGE stream: ${result.size} bytes; PDL transfer blocks=1; ${page.width}x${page.height} @ ${job.dpi} DPI; raster2=${twoBit.size} bytes; CMLP payload=8192 (baseline #121 transport)")
     }.getOrElse { error ->
         Result(false, null, "Canon HB encoder failed: ${error.message ?: error.javaClass.simpleName}")
     }
