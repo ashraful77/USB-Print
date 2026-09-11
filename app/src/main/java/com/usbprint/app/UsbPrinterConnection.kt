@@ -107,7 +107,7 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
         }
 
         val status = readPrinterClassStatus()
-        val inResult = readImmediatePrinterResponse()
+        val inResult = readPrinterResponsesAfterJob(5000)
         val message = buildString {
             append("USB transfer completed ✓")
             if (sourceBytes != null && sourceBytes >= 0) append("\nPDF file: ").append(formatBytes(sourceBytes))
@@ -278,15 +278,25 @@ class UsbPrinterConnection(private val usbManager: UsbManager) {
         }
     }
 
-    private fun readImmediatePrinterResponse(): String {
+    private fun readPrinterResponsesAfterJob(windowMs: Long): String {
         val usb = connection ?: return "IN endpoint response: unavailable"
         val endpoint = inEndpoint ?: return "IN endpoint response: unavailable"
-        val buffer = ByteArray(endpoint.maxPacketSize.coerceAtLeast(512))
-        val n = usb.bulkTransfer(endpoint, buffer, 0, buffer.size, 1000)
+        val deadline = android.os.SystemClock.elapsedRealtime() + windowMs
+        val buffer = ByteArray(maxOf(endpoint.maxPacketSize, 512))
+        val responses = mutableListOf<String>()
+        var reads = 0
+        while (android.os.SystemClock.elapsedRealtime() < deadline && responses.size < 8) {
+            reads++
+            val remaining = (deadline - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(1L)
+            val timeout = minOf(500L, remaining).toInt()
+            val n = usb.bulkTransfer(endpoint, buffer, 0, buffer.size, timeout)
+            if (n > 0) {
+                responses += buffer.copyOf(n).joinToString(" ") { hexByte(it) }
+            }
+        }
         return when {
-            n > 0 -> "IN endpoint response: $n byte(s) ${buffer.copyOf(n).joinToString(" ") { hexByte(it) }}"
-            n == 0 -> "IN endpoint response: empty"
-            else -> "IN endpoint response: none within timeout"
+            responses.isNotEmpty() -> "IN endpoint response(s): ${responses.size}; " + responses.joinToString(" | ") { "[$it]" } + "; reads=$reads; window=${windowMs}ms"
+            else -> "IN endpoint response: none within ${windowMs}ms (reads=$reads)"
         }
     }
 
