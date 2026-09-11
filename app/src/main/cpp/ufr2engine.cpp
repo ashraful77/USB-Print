@@ -14,7 +14,10 @@ namespace {
 using Byte = uint8_t;
 struct NativeResult { bool ok; std::vector<Byte> data; std::string message; };
 constexpr int W=4958, H=7016;
-constexpr int STRIPE_LINES=256;
+// #123 experiment: send the entire raster as one HB transfer block instead of
+// 28 x 256-line blocks. Transport, raster and all surrounding PDL commands
+// remain unchanged from #121.
+constexpr int STRIPE_LINES=H;
 constexpr size_t CMLP_PAYLOAD=8192;
 
 jobject result(JNIEnv* e,const NativeResult& r){jclass c=e->FindClass("com/usbprint/app/Ufr2Encoder$Result");if(!c)return nullptr;jmethodID m=e->GetMethodID(c,"<init>","(Z[BLjava/lang/String;)V");if(!m)return nullptr;jbyteArray a=nullptr;if(r.ok){a=e->NewByteArray((jsize)r.data.size());if(!a)return nullptr;if(!r.data.empty())e->SetByteArrayRegion(a,0,(jsize)r.data.size(),reinterpret_cast<const jbyte*>(r.data.data()));}jstring s=e->NewStringUTF(r.message.c_str());jobject o=e->NewObject(c,m,(jboolean)r.ok,a,s);if(a)e->DeleteLocalRef(a);e->DeleteLocalRef(s);return o;}
@@ -43,7 +46,7 @@ NativeResult encode(const jbyte*r,int w,int h,int dpi){
   }
   add(std::vector<Byte>{0x13,0x12,0x11});
   std::vector<Byte>out;out.reserve(pdl.size()+pdl.size()/CMLP_PAYLOAD*8+16);frames(out,pdl);
-  std::ostringstream m;m<<"Canon LBP6030B HB raw 2-bit stream: "<<out.size()<<" bytes; PDL "<<pdl.size()<<" bytes; "<<W<<"x"<<H<<" @ 600 DPI; raw 2-bit, 256-line bands="<<bands<<"; raster2="<<input.size()<<" bytes; CMLP payload=8192 (matches MLC recv/send size)";
+  std::ostringstream m;m<<"Canon LBP6030B HB raw 2-bit WHOLE-PAGE stream: "<<out.size()<<" bytes; PDL "<<pdl.size()<<" bytes; "<<W<<"x"<<H<<" @ 600 DPI; one transfer block="<<bands<<"; raster2="<<input.size()<<" bytes; CMLP payload=8192 (baseline #121 transport)";
   return {true,std::move(out),m.str()};
  }catch(const std::exception&e){return {false,{},std::string("Native Canon raw encoder failed: ")+e.what()};}
 }
