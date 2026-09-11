@@ -5,8 +5,8 @@ import java.io.ByteArrayOutputStream
 /**
  * Canon LBP6030B UFR II LT / SFP HB encoder.
  *
- * #124 restores #121's 28 x 256-line HB bands and changes only the 2-bit
- * pixel packing order to LSB-first within each output byte.
+ * #127 restores #121's 28 x 256-line HB bands and MSB-first 2-bit packing,
+ * then tests the natural nested finalization order: end-page, end-media, end-job.
  */
 class Ufr2Encoder(
     private val profile: Ufr2PrinterProfile = Ufr2PrinterProfile.LBP6030B
@@ -117,7 +117,7 @@ class Ufr2Encoder(
                     val source = page.data[srcBase + (x ushr 3)].toInt() and 0xFF
                     val black = ((source ushr (7 - (x and 7))) and 1) != 0
                     val value = if (black) 0 else 3
-                    val shift = (x and 3) * 2
+                    val shift = 6 - ((x and 3) * 2)
                     val index = dstBase + (x ushr 2)
                     dst[index] = (dst[index].toInt() or (value shl shift)).toByte()
                 }
@@ -179,12 +179,13 @@ class Ufr2Encoder(
             bands++
         }
 
-        appendRawPdl(stream, byteArrayOf(0x13))
-        appendRawPdl(stream, byteArrayOf(0x12))
+        // Natural nesting: close the page, then media, then job.
         appendRawPdl(stream, byteArrayOf(0x11))
+        appendRawPdl(stream, byteArrayOf(0x12))
+        appendRawPdl(stream, byteArrayOf(0x13))
 
         val result = stream.toByteArray()
-        Result(true, result, "Canon LBP6030B HB raw 2-bit LSB-FIRST stream: ${result.size} bytes; PDL transfer blocks=$bands; ${page.width}x${page.height} @ ${job.dpi} DPI; raster2=${twoBit.size} bytes; CMLP payload=8192 (baseline #121 transport)")
+        Result(true, result, "Canon LBP6030B HB raw 2-bit MSB-FIRST stream: ${result.size} bytes; PDL transfer blocks=$bands; ${page.width}x${page.height} @ ${job.dpi} DPI; raster2=${twoBit.size} bytes; CMLP payload=8192 (baseline #121 transport); end=11-12-13")
     }.getOrElse { error ->
         Result(false, null, "Canon HB encoder failed: ${error.message ?: error.javaClass.simpleName}")
     }
