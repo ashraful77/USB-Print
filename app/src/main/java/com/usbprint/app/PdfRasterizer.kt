@@ -11,10 +11,8 @@ import kotlin.math.roundToInt
 /**
  * Canon LBP6030B raster input.
  *
- * #129: render an 8-bit grayscale raster instead of thresholding to 1-bit.
- * Canon's SFP/CUPS pipeline receives grayscale raster data before the HB
- * output-depth conversion. The native encoder performs the controlled
- * grayscale -> 2-bit conversion.
+ * #131 restores the #121 baseline 1-bit raster. PDL experiments are now
+ * isolated from raster changes so the CMLP framing test is controlled.
  */
 object PdfRasterizer {
     const val WIDTH = 4958
@@ -38,24 +36,28 @@ object PdfRasterizer {
                     Canvas(bitmap).drawColor(Color.WHITE)
                     page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
 
-                    val grayscale = ByteArray(WIDTH * HEIGHT)
+                    val bytesPerRow = (WIDTH + 7) / 8
+                    val raster = ByteArray(bytesPerRow * HEIGHT)
                     val row = IntArray(WIDTH)
                     for (y in 0 until HEIGHT) {
                         bitmap.getPixels(row, 0, WIDTH, 0, y, WIDTH, 1)
-                        val rowBase = y * WIDTH
+                        val rowBase = y * bytesPerRow
                         for (x in 0 until WIDTH) {
                             val c = row[x]
-                            // Standard luminance conversion; preserve 8-bit
-                            // grayscale rather than applying a binary threshold.
                             val r = Color.red(c)
                             val g = Color.green(c)
                             val b = Color.blue(c)
-                            grayscale[rowBase + x] =
-                                (0.299f * r + 0.587f * g + 0.114f * b).roundToInt().coerceIn(0, 255).toByte()
+                            val gray = (0.299f * r + 0.587f * g + 0.114f * b)
+                                .roundToInt().coerceIn(0, 255)
+                            if (gray < 180) {
+                                raster[rowBase + (x ushr 3)] =
+                                    (raster[rowBase + (x ushr 3)].toInt() or
+                                        (1 shl (7 - (x and 7)))).toByte()
+                            }
                         }
                     }
                     bitmap.recycle()
-                    return RasterPage(grayscale, WIDTH, HEIGHT, DPI, 8)
+                    return RasterPage(raster, WIDTH, HEIGHT, DPI, 1)
                 }
             }
         }
