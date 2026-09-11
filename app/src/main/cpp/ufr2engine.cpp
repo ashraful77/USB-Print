@@ -1,9 +1,7 @@
 #include <jni.h>
 #include <android/log.h>
-#include <dlfcn.h>
 #include <algorithm>
 #include <cstdint>
-#include <cstring>
 #include <initializer_list>
 #include <sstream>
 #include <stdexcept>
@@ -14,15 +12,12 @@
 
 namespace {
 using Byte = uint8_t;
-using SlimCompFn = int (*)(Byte*, Byte*, int, int, int, int, int*, void*, int, void*);
-struct CompParam { Byte xOffset[2]{}; Byte yOffset[2]{}; int8_t zOffset[2]{}; uint16_t farOffset{}; };
 struct NativeResult { bool ok; std::vector<Byte> data; std::string message; };
 constexpr int W=4958, H=7016;
-constexpr CompParam PARAM{{3,9},{6,1},{0,0},80};
+constexpr int STRIPE_LINES=256;
 
 jobject result(JNIEnv* e,const NativeResult& r){jclass c=e->FindClass("com/usbprint/app/Ufr2Encoder$Result");if(!c)return nullptr;jmethodID m=e->GetMethodID(c,"<init>","(Z[BLjava/lang/String;)V");if(!m)return nullptr;jbyteArray a=nullptr;if(r.ok){a=e->NewByteArray((jsize)r.data.size());if(!a)return nullptr;if(!r.data.empty())e->SetByteArrayRegion(a,0,(jsize)r.data.size(),reinterpret_cast<const jbyte*>(r.data.data()));}jstring s=e->NewStringUTF(r.message.c_str());jobject o=e->NewObject(c,m,(jboolean)r.ok,a,s);if(a)e->DeleteLocalRef(a);e->DeleteLocalRef(s);return o;}
 void p16(std::vector<Byte>&o,int v){o.push_back((Byte)(v>>8));o.push_back((Byte)v);}
-void p32le(std::vector<Byte>&o,int v){uint32_t x=(uint32_t)v;o.push_back(x);o.push_back(x>>8);o.push_back(x>>16);o.push_back(x>>24);}
 void p32be(std::vector<Byte>&o,int v){uint32_t x=(uint32_t)v;o.push_back(x>>24);o.push_back(x>>16);o.push_back(x>>8);o.push_back(x);}
 void ap(std::vector<Byte>&o,std::initializer_list<int>v){for(int x:v)o.push_back((Byte)x);}
 std::vector<Byte> job(int d){std::vector<Byte>o;ap(o,{1,0xC1,0x85});p16(o,d);p16(o,d);ap(o,{0xC2,0,0xD8,0x84,0,1,0xDD,0x80,0xC8,0xF0,0x84,8,0,2});return o;}
@@ -35,17 +30,21 @@ void frames(std::vector<Byte>&o,const std::vector<Byte>&p){for(size_t i=0;i<p.si
 
 NativeResult encode(const jbyte*r,int w,int h,int dpi){
  if(!r||w!=W||h!=H||dpi!=600)return {false,{},"Canon LBP6030B requires 4958x7016 at 600 DPI"};
- void*lib=dlopen("libcanon_slimsfp.so",RTLD_NOW|RTLD_LOCAL);if(!lib){const char*x=dlerror();return {false,{},std::string("Cannot load Canon SLIM library: ")+(x?x:"unknown")};}
- auto comp=reinterpret_cast<SlimCompFn>(dlsym(lib,"lCaptCompEx"));if(!comp){const char*x=dlerror();dlclose(lib);return {false,{},std::string("Canon SLIM lCaptCompEx unavailable: ")+(x?x:"unknown")};}
  try{
-  auto input=to2(r);int bpr=(W+3)/4;int cap=(int)std::min<size_t>(input.size()*2ull+4096ull,0x7fffffff);std::vector<Byte>z((size_t)cap);int lines=0;CompParam p=PARAM;
-  int n=comp(input.data(),z.data(),bpr,H,cap,2,&lines,&p,2,nullptr);
-  LOGE("SLC Ex whole-page lines=%d compressed=%d params=03 09 06 01 00 00 50 00 first=%02x %02x %02x %02x %02x %02x %02x %02x",lines,n,z[0],z[1],z[2],z[3],z[4],z[5],z[6],z[7]);
-  if(n<=0||n>cap||lines<=0||lines>H){dlclose(lib);return {false,{},"Canon SLIM basic compression returned an invalid result"};}
-  std::vector<Byte>pdl;auto add=[&](const std::vector<Byte>&v){pdl.insert(pdl.end(),v.begin(),v.end());};add(job(dpi));add(media());add(std::vector<Byte>{0x51,0xF2,0});add(page());add(std::vector<Byte>{0x61,0xE6,0x80,2,0xE5,0});
-  std::vector<Byte>s;s.reserve((size_t)n+18);s.push_back(p.xOffset[0]);s.push_back(p.xOffset[1]);s.push_back(p.yOffset[0]);s.push_back(p.yOffset[1]);s.push_back((Byte)p.zOffset[0]);s.push_back((Byte)p.zOffset[1]);s.push_back((Byte)p.farOffset);s.push_back((Byte)(p.farOffset>>8));s.push_back(1);p32le(s,n+4);s.insert(s.end(),z.begin(),z.begin()+n);ap(s,{0xBD,0x3C,0xDC,0x80,0});add(header(lines,(int)s.size()));add(s);add(std::vector<Byte>{0x13,0x12,0x11});std::vector<Byte>out;out.reserve(pdl.size()+pdl.size()/4096*8+16);frames(out,pdl);dlclose(lib);
-  std::ostringstream m;m<<"Canon LBP6030B SFP/SLIM stream: "<<out.size()<<" bytes; PDL "<<pdl.size()<<" bytes; "<<W<<"x"<<H<<" @ 600 DPI; Ex whole-page compression; encodedLines="<<lines<<"; compressed="<<n<<"; params=[3,9,6,1,0,0,80]; first8=";for(int i=0;i<8&&i<n;i++){if(i)m<<",";m<<std::hex<<(int)z[i];}return {true,std::move(out),m.str()};
- }catch(const std::exception&e){dlclose(lib);return {false,{},std::string("Native Canon encoder failed: ")+e.what()};}
+  auto input=to2(r);int bpr=(W+3)/4;
+  std::vector<Byte>pdl;pdl.reserve((size_t)H*bpr+4096);
+  auto add=[&](const std::vector<Byte>&v){pdl.insert(pdl.end(),v.begin(),v.end());};
+  add(job(dpi));add(media());add(std::vector<Byte>{0x51,0xF2,0});add(page());add(std::vector<Byte>{0x61,0xE6,0x80,2,0xE5,0});
+  int bands=0;
+  for(int lineStart=0;lineStart<H;lineStart+=STRIPE_LINES){
+   int lines=std::min(STRIPE_LINES,H-lineStart);int n=bpr*lines;add(header(lines,n));
+   size_t start=(size_t)lineStart*bpr;pdl.insert(pdl.end(),input.begin()+start,input.begin()+start+n);bands++;
+  }
+  add(std::vector<Byte>{0x13,0x12,0x11});
+  std::vector<Byte>out;out.reserve(pdl.size()+pdl.size()/4096*8+16);frames(out,pdl);
+  std::ostringstream m;m<<"Canon LBP6030B HB raw 2-bit stream: "<<out.size()<<" bytes; PDL "<<pdl.size()<<" bytes; "<<W<<"x"<<H<<" @ 600 DPI; raw 2-bit, 256-line bands="<<bands<<"; raster2="<<input.size()<<" bytes; CMLP payload=4096";
+  return {true,std::move(out),m.str()};
+ }catch(const std::exception&e){return {false,{},std::string("Native Canon raw encoder failed: ")+e.what()};}
 }
 }
 extern "C" JNIEXPORT jobject JNICALL Java_com_usbprint_app_NativeUfr2Engine_encodeNative(JNIEnv*e,jobject,jbyteArray a,jint w,jint h,jint dpi,jint,jint){if(!a)return result(e,{false,{},"Raster is null"});jsize n=e->GetArrayLength(a),expected=((w+7)/8)*h;if(n!=expected)return result(e,{false,{},"Unexpected 1-bit raster size"});std::vector<jbyte>r((size_t)n);e->GetByteArrayRegion(a,0,n,r.data());return result(e,encode(r.data(),w,h,dpi));}
