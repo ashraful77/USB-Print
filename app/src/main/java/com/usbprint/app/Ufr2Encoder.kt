@@ -5,18 +5,15 @@ import java.io.ByteArrayOutputStream
 /**
  * Canon LBP6030B UFR II LT / SFP HB encoder.
  *
- * #123 keeps the #121 USB/MLC/CMLP transport and raster unchanged, but tests
- * the raw HB PDL with the entire raster emitted as one transfer block rather
- * than 28 x 256-line transfer blocks. This isolates band continuation/header
- * handling from the transport layer.
+ * #124 restores #121's 28 x 256-line HB bands and changes only the 2-bit
+ * pixel packing order to LSB-first within each output byte.
  */
 class Ufr2Encoder(
     private val profile: Ufr2PrinterProfile = Ufr2PrinterProfile.LBP6030B
 ) {
     companion object {
         private const val COMMAND_CHUNK = 0x1000
-        // #123: one transfer block for the complete Canon A4 raster.
-        private const val STRIPE_LINES = 7016
+        private const val STRIPE_LINES = 256
 
         private fun buildCmlpFrame(payload: ByteArray): ByteArray {
             val totalLength = payload.size + 6
@@ -120,7 +117,7 @@ class Ufr2Encoder(
                     val source = page.data[srcBase + (x ushr 3)].toInt() and 0xFF
                     val black = ((source ushr (7 - (x and 7))) and 1) != 0
                     val value = if (black) 0 else 3
-                    val shift = 6 - ((x and 3) * 2)
+                    val shift = (x and 3) * 2
                     val index = dstBase + (x ushr 2)
                     dst[index] = (dst[index].toInt() or (value shl shift)).toByte()
                 }
@@ -170,6 +167,7 @@ class Ufr2Encoder(
         appendRawPdl(stream, prepareHalftone())
 
         var lineStart = 0
+        var bands = 0
         while (lineStart < page.height) {
             val lines = minOf(STRIPE_LINES, page.height - lineStart)
             val dataLength = bytesPerLine * lines
@@ -178,6 +176,7 @@ class Ufr2Encoder(
             val end = start + dataLength
             appendRawPdl(stream, twoBit.copyOfRange(start, end))
             lineStart += lines
+            bands++
         }
 
         appendRawPdl(stream, byteArrayOf(0x13))
@@ -185,7 +184,7 @@ class Ufr2Encoder(
         appendRawPdl(stream, byteArrayOf(0x11))
 
         val result = stream.toByteArray()
-        Result(true, result, "Canon LBP6030B HB raw 2-bit WHOLE-PAGE stream: ${result.size} bytes; PDL transfer blocks=1; ${page.width}x${page.height} @ ${job.dpi} DPI; raster2=${twoBit.size} bytes; CMLP payload=8192 (baseline #121 transport)")
+        Result(true, result, "Canon LBP6030B HB raw 2-bit LSB-FIRST stream: ${result.size} bytes; PDL transfer blocks=$bands; ${page.width}x${page.height} @ ${job.dpi} DPI; raster2=${twoBit.size} bytes; CMLP payload=8192 (baseline #121 transport)")
     }.getOrElse { error ->
         Result(false, null, "Canon HB encoder failed: ${error.message ?: error.javaClass.simpleName}")
     }
