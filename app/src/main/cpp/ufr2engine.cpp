@@ -17,181 +17,35 @@ using Byte = uint8_t;
 using SlimCompFn = int (*)(Byte*, Byte*, int, int, int, int, int*, void*, int, void*);
 struct CompParam { Byte xOffset[2]{}; Byte yOffset[2]{}; int8_t zOffset[2]{}; uint16_t farOffset{}; };
 struct NativeResult { bool ok; std::vector<Byte> data; std::string message; };
+constexpr int W=4958, H=7016;
+constexpr CompParam PARAM{{3,9},{6,1},{0,0},80};
 
-constexpr int CANON_A4_WIDTH = 4958;
-constexpr int CANON_A4_HEIGHT = 7016;
+jobject result(JNIEnv* e,const NativeResult& r){jclass c=e->FindClass("com/usbprint/app/Ufr2Encoder$Result");if(!c)return nullptr;jmethodID m=e->GetMethodID(c,"<init>","(Z[BLjava/lang/String;)V");if(!m)return nullptr;jbyteArray a=nullptr;if(r.ok){a=e->NewByteArray((jsize)r.data.size());if(!a)return nullptr;if(!r.data.empty())e->SetByteArrayRegion(a,0,(jsize)r.data.size(),reinterpret_cast<const jbyte*>(r.data.data()));}jstring s=e->NewStringUTF(r.message.c_str());jobject o=e->NewObject(c,m,(jboolean)r.ok,a,s);if(a)e->DeleteLocalRef(a);e->DeleteLocalRef(s);return o;}
+void p16(std::vector<Byte>&o,int v){o.push_back((Byte)(v>>8));o.push_back((Byte)v);}
+void p32le(std::vector<Byte>&o,int v){uint32_t x=(uint32_t)v;o.push_back(x);o.push_back(x>>8);o.push_back(x>>16);o.push_back(x>>24);}
+void p32be(std::vector<Byte>&o,int v){uint32_t x=(uint32_t)v;o.push_back(x>>24);o.push_back(x>>16);o.push_back(x>>8);o.push_back(x);}
+void ap(std::vector<Byte>&o,std::initializer_list<int>v){for(int x:v)o.push_back((Byte)x);}
+std::vector<Byte> job(int d){std::vector<Byte>o;ap(o,{1,0xC1,0x85});p16(o,d);p16(o,d);ap(o,{0xC2,0,0xD8,0x84,0,1,0xDD,0x80,0xC8,0xF0,0x84,8,0,2});return o;}
+std::vector<Byte> media(){return {2,0xC3,0x7F,0xF1,0x85,0,0,0,0,0xC5,0,0xC6,0};}
+std::vector<Byte> page(){return {3,0xE7,0x85,(Byte)(W>>8),(Byte)W,(Byte)(H>>8),(Byte)H,0xDE,0x80,0,0xC8,0,0xCA,0xA1,0,0,0xCB,0};}
+std::vector<Byte> header(int lines,int n){std::vector<Byte>o;ap(o,{0x62,0xE3,0x85});p16(o,W);p16(o,lines);ap(o,{0xE8,0xA5});p16(o,W);p16(o,lines);ap(o,{0xE1,0,0xD7});if(n<=0xFFFF){ap(o,{0x84});p16(o,n);ap(o,{0x9D});p16(o,n);}else{ap(o,{0x88});p32be(o,n);ap(o,{0x9E});p32be(o,n);}return o;}
+std::vector<Byte> to2(const jbyte*r){int sb=(W+7)/8,db=(W+3)/4;std::vector<Byte>o((size_t)db*H);for(int y=0;y<H;y++){const Byte*s=(const Byte*)r+(size_t)y*sb;Byte*d=o.data()+(size_t)y*db;for(int x=0;x<W;x++){int v=((s[x>>3]>>(7-(x&7)))&1)?0:3;d[x>>2]|=(Byte)(v<<(6-2*(x&3)));}}return o;}
+void cmlp(std::vector<Byte>&o,const Byte*p,size_t n){size_t t=n+6;if(t>0xffff)throw std::runtime_error("CMLP frame too large");o.push_back(1);o.push_back(0x10);o.push_back(t>>8);o.push_back(t);o.push_back(1);o.push_back(0);o.insert(o.end(),p,p+n);}
+void frames(std::vector<Byte>&o,const std::vector<Byte>&p){for(size_t i=0;i<p.size();){size_t n=std::min<size_t>(4096,p.size()-i);cmlp(o,p.data()+i,n);i+=n;}static const Byte f[]={8,0,0,0};cmlp(o,f,4);}
 
-// Canon's LBP6030 SFP PPD supplies CN_PDL_SLC_FI_GN_NL_K="3,9,6,1,0,0,80".
-// The SLIM compressor consumes the first six values as signed byte offsets and
-// the final value as a 16-bit far-reference offset. The final byte is zero.
-constexpr CompParam CANON_SLC_PARAMS{{3, 9}, {6, 1}, {0, 0}, 80};
-
-jobject makeResult(JNIEnv* env, const NativeResult& result) {
-    jclass cls = env->FindClass("com/usbprint/app/Ufr2Encoder$Result");
-    if (!cls) return nullptr;
-    jmethodID ctor = env->GetMethodID(cls, "<init>", "(Z[BLjava/lang/String;)V");
-    if (!ctor) return nullptr;
-    jbyteArray bytes = nullptr;
-    if (result.ok) {
-        bytes = env->NewByteArray(static_cast<jsize>(result.data.size()));
-        if (!bytes) return nullptr;
-        if (!result.data.empty()) env->SetByteArrayRegion(bytes, 0, static_cast<jsize>(result.data.size()), reinterpret_cast<const jbyte*>(result.data.data()));
-    }
-    jstring msg = env->NewStringUTF(result.message.c_str());
-    jobject out = env->NewObject(cls, ctor, static_cast<jboolean>(result.ok), bytes, msg);
-    if (bytes) env->DeleteLocalRef(bytes);
-    env->DeleteLocalRef(msg);
-    return out;
+NativeResult encode(const jbyte*r,int w,int h,int dpi){
+ if(!r||w!=W||h!=H||dpi!=600)return {false,{},"Canon LBP6030B requires 4958x7016 at 600 DPI"};
+ void*lib=dlopen("libcanon_slimsfp.so",RTLD_NOW|RTLD_LOCAL);if(!lib){const char*x=dlerror();return {false,{},std::string("Cannot load Canon SLIM library: ")+(x?x:"unknown")};}
+ auto comp=reinterpret_cast<SlimCompFn>(dlsym(lib,"lCaptCompEx2"));if(!comp){const char*x=dlerror();dlclose(lib);return {false,{},std::string("Canon SLIM lCaptCompEx2 unavailable: ")+(x?x:"unknown")};}
+ try{
+  auto input=to2(r);int bpr=(W+3)/4;int cap=(int)std::min<size_t>(input.size()*2ull+4096ull,0x7fffffff);std::vector<Byte>z((size_t)cap);int lines=0;CompParam p=PARAM;
+  int n=comp(input.data(),z.data(),bpr,H,cap,2,&lines,&p,2,nullptr);
+  LOGE("SLC Ex2 whole-page lines=%d compressed=%d params=03 09 06 01 00 00 50 00 first=%02x %02x %02x %02x %02x %02x %02x %02x",lines,n,z[0],z[1],z[2],z[3],z[4],z[5],z[6],z[7]);
+  if(n<=0||n>cap||lines<=0||lines>H){dlclose(lib);return {false,{},"Canon SLIM reference-aware compression returned an invalid result"};}
+  std::vector<Byte>pdl;auto add=[&](const std::vector<Byte>&v){pdl.insert(pdl.end(),v.begin(),v.end());};add(job(dpi));add(media());add(std::vector<Byte>{0x51,0xF2,0});add(page());add(std::vector<Byte>{0x61,0xE6,0x80,2,0xE5,0});
+  std::vector<Byte>s;s.reserve((size_t)n+18);s.push_back(p.xOffset[0]);s.push_back(p.xOffset[1]);s.push_back(p.yOffset[0]);s.push_back(p.yOffset[1]);s.push_back((Byte)p.zOffset[0]);s.push_back((Byte)p.zOffset[1]);s.push_back((Byte)p.farOffset);s.push_back((Byte)(p.farOffset>>8));s.push_back(1);p32le(s,n+4);s.insert(s.end(),z.begin(),z.begin()+n);ap(s,{0xBD,0x3C,0xDC,0x80,0});add(header(lines,(int)s.size()));add(s);add(std::vector<Byte>{0x13,0x12,0x11});std::vector<Byte>out;out.reserve(pdl.size()+pdl.size()/4096*8+16);frames(out,pdl);dlclose(lib);
+  std::ostringstream m;m<<"Canon LBP6030B SFP/SLIM stream: "<<out.size()<<" bytes; PDL "<<pdl.size()<<" bytes; "<<W<<"x"<<H<<" @ 600 DPI; Ex2 whole-page compression; encodedLines="<<lines<<"; compressed="<<n<<"; params=[3,9,6,1,0,0,80]; first8=";for(int i=0;i<8&&i<n;i++){if(i)m<<",";m<<std::hex<<(int)z[i];}return {true,std::move(out),m.str()};
+ }catch(const std::exception&e){dlclose(lib);return {false,{},std::string("Native Canon encoder failed: ")+e.what()};}
 }
-
-void put16be(std::vector<Byte>& out, int value) {
-    out.push_back(static_cast<Byte>((value >> 8) & 0xff));
-    out.push_back(static_cast<Byte>(value & 0xff));
 }
-void put32le(std::vector<Byte>& out, int value) {
-    uint32_t v = static_cast<uint32_t>(value);
-    out.push_back(static_cast<Byte>(v & 0xff));
-    out.push_back(static_cast<Byte>((v >> 8) & 0xff));
-    out.push_back(static_cast<Byte>((v >> 16) & 0xff));
-    out.push_back(static_cast<Byte>((v >> 24) & 0xff));
-}
-void put32be(std::vector<Byte>& out, int value) {
-    uint32_t v = static_cast<uint32_t>(value);
-    out.push_back(static_cast<Byte>((v >> 24) & 0xff));
-    out.push_back(static_cast<Byte>((v >> 16) & 0xff));
-    out.push_back(static_cast<Byte>((v >> 8) & 0xff));
-    out.push_back(static_cast<Byte>(v & 0xff));
-}
-void append(std::vector<Byte>& out, std::initializer_list<int> values) {
-    for (int v : values) out.push_back(static_cast<Byte>(v));
-}
-
-std::vector<Byte> beginJob(int dpi) {
-    std::vector<Byte> out;
-    append(out, {0x01, 0xC1, 0x85});
-    put16be(out, dpi);
-    put16be(out, dpi);
-    append(out, {0xC2, 0x00, 0xD8, 0x84, 0x00, 0x01, 0xDD, 0x80, 0xC8, 0xF0, 0x84, 0x08, 0x00, 0x02});
-    return out;
-}
-std::vector<Byte> beginMedia() { return {0x02, 0xC3, 0x7F, 0xF1, 0x85, 0x00, 0x00, 0x00, 0x00, 0xC5, 0x00, 0xC6, 0x00}; }
-std::vector<Byte> paperSource() { return {0x51, 0xF2, 0x00}; }
-std::vector<Byte> prepare() { return {0x61, 0xE6, 0x80, 0x02, 0xE5, 0x00}; }
-
-std::vector<Byte> beginPage() {
-    return {0x03, 0xE7, 0x85,
-            static_cast<Byte>((CANON_A4_WIDTH >> 8) & 0xff), static_cast<Byte>(CANON_A4_WIDTH & 0xff),
-            static_cast<Byte>((CANON_A4_HEIGHT >> 8) & 0xff), static_cast<Byte>(CANON_A4_HEIGHT & 0xff),
-            0xDE, 0x80, 0x00, 0xC8, 0x00, 0xCA, 0xA1, 0x00, 0x00, 0xCB, 0x00};
-}
-
-std::vector<Byte> transferHeader(int lines, int dataLength) {
-    std::vector<Byte> out;
-    append(out, {0x62, 0xE3, 0x85});
-    put16be(out, CANON_A4_WIDTH); put16be(out, lines);
-    append(out, {0xE8, 0xA5});
-    put16be(out, CANON_A4_WIDTH); put16be(out, lines);
-    append(out, {0xE1, 0x00, 0xD7});
-    if (dataLength <= 0xFFFF) { append(out, {0x84}); put16be(out, dataLength); append(out, {0x9D}); put16be(out, dataLength); }
-    else { append(out, {0x88}); put32be(out, dataLength); append(out, {0x9E}); put32be(out, dataLength); }
-    return out;
-}
-
-std::vector<Byte> oneBitToTwoBit(const jbyte* raster, int width, int height) {
-    const int srcBpr = (width + 7) / 8, dstBpr = (width + 3) / 4;
-    std::vector<Byte> out(static_cast<size_t>(dstBpr) * height, 0);
-    for (int y = 0; y < height; ++y) {
-        const Byte* src = reinterpret_cast<const Byte*>(raster) + static_cast<size_t>(y) * srcBpr;
-        Byte* dst = out.data() + static_cast<size_t>(y) * dstBpr;
-        for (int x = 0; x < width; ++x) {
-            const bool black = ((src[x >> 3] >> (7 - (x & 7))) & 1) != 0;
-            const int value = black ? 0 : 3;
-            dst[x >> 2] = static_cast<Byte>(dst[x >> 2] | (value << (6 - 2 * (x & 3))));
-        }
-    }
-    return out;
-}
-
-void appendCmlpFrame(std::vector<Byte>& out, const Byte* payload, size_t n) {
-    const size_t total = n + 6;
-    if (total > 0xffff) throw std::runtime_error("CMLP frame too large");
-    out.push_back(0x01); out.push_back(0x10);
-    out.push_back(static_cast<Byte>((total >> 8) & 0xff)); out.push_back(static_cast<Byte>(total & 0xff));
-    out.push_back(0x01); out.push_back(0x00);
-    out.insert(out.end(), payload, payload + n);
-}
-void appendCmlpFrames(std::vector<Byte>& out, const std::vector<Byte>& pdl) {
-    constexpr size_t CHUNK = 0x1000;
-    for (size_t pos = 0; pos < pdl.size();) { const size_t n = std::min(CHUNK, pdl.size() - pos); appendCmlpFrame(out, pdl.data() + pos, n); pos += n; }
-    static const Byte flush[] = {0x08, 0x00, 0x00, 0x00};
-    appendCmlpFrame(out, flush, sizeof(flush));
-}
-
-NativeResult encode(const jbyte* raster, int width, int height, int dpi) {
-    if (!raster || width <= 0 || height <= 0) return {false, {}, "Invalid raster"};
-    if (dpi != 600) return {false, {}, "Canon LBP6030B SFP path currently requires 600 DPI"};
-    if (width != CANON_A4_WIDTH || height != CANON_A4_HEIGHT) {
-        std::ostringstream msg; msg << "Canon LBP6030B requires A4 raster " << CANON_A4_WIDTH << "x" << CANON_A4_HEIGHT << " at 600 DPI; received " << width << "x" << height;
-        return {false, {}, msg.str()};
-    }
-    void* handle = dlopen("libcanon_slimsfp.so", RTLD_NOW | RTLD_LOCAL);
-    if (!handle) { const char* err = dlerror(); return {false, {}, std::string("Cannot load Canon SLIM library: ") + (err ? err : "unknown error")}; }
-    auto comp = reinterpret_cast<SlimCompFn>(dlsym(handle, "lCaptCompEx"));
-    if (!comp) { const char* err = dlerror(); dlclose(handle); return {false, {}, std::string("Canon SLIM lCaptCompEx is unavailable: ") + (err ? err : "unknown error")}; }
-    try {
-        const auto twoBit = oneBitToTwoBit(raster, width, height);
-        const int srcBpr = (width + 3) / 4, stripes = (height + 255) / 256;
-        std::vector<Byte> pdl;
-        std::ostringstream diag;
-        diag << "SLC diag params=[3,9,6,1,0,0,80], bands=" << stripes;
-        auto add = [&](const std::vector<Byte>& b) { pdl.insert(pdl.end(), b.begin(), b.end()); };
-        add(beginJob(dpi)); add(beginMedia()); add(paperSource()); add(beginPage()); add(prepare());
-        for (int band = 0; band < stripes; ++band) {
-            const int line0 = band * 256, lines = std::min(256, height - line0);
-            std::vector<Byte> input(static_cast<size_t>(srcBpr) * lines);
-            std::memcpy(input.data(), twoBit.data() + static_cast<size_t>(line0) * srcBpr, input.size());
-            const int capacity = static_cast<int>(input.size() * 2 + 4096);
-            std::vector<Byte> compressed(static_cast<size_t>(capacity));
-            int encodedLines = 0;
-            CompParam param = CANON_SLC_PARAMS;
-            const int compressedLen = comp(input.data(), compressed.data(), srcBpr, lines, capacity, 2, &encodedLines, &param, 2, nullptr);
-            if (compressedLen <= 0 || compressedLen > capacity || encodedLines <= 0 || encodedLines > lines) { dlclose(handle); return {false, {}, "Canon SLIM compression returned an invalid result"}; }
-            if (band < 3 || band == stripes - 1) {
-                diag << " b" << band << "(" << lines << "/" << encodedLines << "/" << compressedLen << ":";
-                const int sample = std::min(8, compressedLen);
-                for (int i = 0; i < sample; ++i) { if (i) diag << ','; diag << std::hex << static_cast<int>(compressed[i] & 0xff); }
-                diag << std::dec << ")";
-                LOGE("SLC band=%d lines=%d encoded=%d compressed=%d first8=%02x %02x %02x %02x %02x %02x %02x %02x params=03 09 06 01 00 00 50 00", band, lines, encodedLines, compressedLen,
-                     compressedLen > 0 ? compressed[0] : 0, compressedLen > 1 ? compressed[1] : 0, compressedLen > 2 ? compressed[2] : 0, compressedLen > 3 ? compressed[3] : 0,
-                     compressedLen > 4 ? compressed[4] : 0, compressedLen > 5 ? compressed[5] : 0, compressedLen > 6 ? compressed[6] : 0, compressedLen > 7 ? compressed[7] : 0);
-            }
-            std::vector<Byte> slc;
-            slc.reserve(static_cast<size_t>(compressedLen) + 18);
-            slc.push_back(param.xOffset[0]); slc.push_back(param.xOffset[1]); slc.push_back(param.yOffset[0]); slc.push_back(param.yOffset[1]);
-            slc.push_back(static_cast<Byte>(param.zOffset[0])); slc.push_back(static_cast<Byte>(param.zOffset[1]));
-            slc.push_back(static_cast<Byte>(param.farOffset & 0xff)); slc.push_back(static_cast<Byte>((param.farOffset >> 8) & 0xff));
-            slc.push_back(0x01); put32le(slc, compressedLen + 4);
-            slc.insert(slc.end(), compressed.begin(), compressed.begin() + compressedLen);
-            append(slc, {0xBD, 0x3C, 0xDC, 0x80, 0x00});
-            const int transferLength = compressedLen + 18;
-            if (static_cast<int>(slc.size()) != transferLength) { dlclose(handle); return {false, {}, "Internal Canon SLC length mismatch"}; }
-            add(transferHeader(encodedLines, transferLength)); add(slc);
-        }
-        add(std::vector<Byte>{0x13}); add(std::vector<Byte>{0x12}); add(std::vector<Byte>{0x11});
-        std::vector<Byte> framed; framed.reserve(pdl.size() + pdl.size() / 4096 * 16 + 16); appendCmlpFrames(framed, pdl);
-        dlclose(handle);
-        std::ostringstream msg; msg << "Canon LBP6030B SFP/SLIM stream: " << framed.size() << " bytes; PDL " << pdl.size() << " bytes; " << width << "x" << height << " @ " << dpi << " DPI; " << diag.str();
-        return {true, std::move(framed), msg.str()};
-    } catch (const std::exception& e) { dlclose(handle); return {false, {}, std::string("Native Canon encoder failed: ") + e.what()}; }
-}
-} // namespace
-
-extern "C" JNIEXPORT jobject JNICALL
-Java_com_usbprint_app_NativeUfr2Engine_encodeNative(JNIEnv* env, jobject, jbyteArray raster, jint width, jint height, jint dpi, jint, jint) {
-    if (!raster) return makeResult(env, {false, {}, "Raster is null"});
-    const jsize size = env->GetArrayLength(raster), expected = ((width + 7) / 8) * height;
-    if (size != expected) { std::ostringstream msg; msg << "Unexpected 1-bit raster size: " << size << ", expected " << expected; return makeResult(env, {false, {}, msg.str()}); }
-    std::vector<jbyte> pixels(static_cast<size_t>(size));
-    env->GetByteArrayRegion(raster, 0, size, pixels.data());
-    return makeResult(env, encode(pixels.data(), width, height, dpi));
-}
+extern "C" JNIEXPORT jobject JNICALL Java_com_usbprint_app_NativeUfr2Engine_encodeNative(JNIEnv*e,jobject,jbyteArray a,jint w,jint h,jint dpi,jint,jint){if(!a)return result(e,{false,{},"Raster is null"});jsize n=e->GetArrayLength(a),expected=((w+7)/8)*h;if(n!=expected)return result(e,{false,{},"Unexpected 1-bit raster size"});std::vector<jbyte>r((size_t)n);e->GetByteArrayRegion(a,0,n,r.data());return result(e,encode(r.data(),w,h,dpi));}
