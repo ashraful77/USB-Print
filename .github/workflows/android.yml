@@ -13,7 +13,7 @@ permissions:
 env:
   ANDROID_NDK_VERSION: 27.2.12479018
 
-jobs:
+enjobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -47,14 +47,31 @@ jobs:
           gradle-version: '9.7.1'
           cache-read-only: false
 
-      - name: Verify build environment
+      - name: Verify project and build environment
+        shell: bash
         run: |
+          set -e
+          test -f settings.gradle.kts || test -f settings.gradle
+          test -d app
           java -version
-          sdkmanager --list_installed | grep -E 'platforms;android-36|build-tools;36.0.0|ndk;27.2.12479018' || true
           gradle --version
+          sdkmanager --list_installed | grep -E 'platforms;android-36|build-tools;36.0.0|ndk;27.2.12479018' || true
 
+      # Do not use ./gradlew here. The repository intentionally uses the
+      # Gradle distribution installed above, so a missing wrapper cannot
+      # prevent a valid Android build.
       - name: Build debug APK
-        run: gradle assembleDebug --stacktrace --info -Pandroid.ndkVersion=${ANDROID_NDK_VERSION}
+        shell: bash
+        run: |
+          set -e
+          gradle assembleDebug --stacktrace --info -Pandroid.ndkVersion=${ANDROID_NDK_VERSION}
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -e
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
