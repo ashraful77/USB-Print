@@ -13,7 +13,7 @@ permissions:
 env:
   ANDROID_NDK_VERSION: 27.2.12479018
 
-enjobs:
+jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
