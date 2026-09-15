@@ -31,6 +31,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Install Android SDK and NDK
         shell: bash
@@ -57,9 +59,6 @@ jobs:
           gradle --version
           sdkmanager --list_installed | grep -E 'platforms;android-36|build-tools;36.0.0|ndk;27.2.12479018' || true
 
-      # Do not use ./gradlew here. The repository intentionally uses the
-      # Gradle distribution installed above, so a missing wrapper cannot
-      # prevent a valid Android build.
       - name: Build debug APK
         shell: bash
         run: |
