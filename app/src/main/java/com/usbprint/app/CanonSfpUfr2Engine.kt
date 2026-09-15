@@ -1,18 +1,18 @@
 package com.usbprint.app
 
 /**
- * Kotlin implementation of the extracted Canon LBP6030B SFP/HB path.
+ * Reserved integration point for a future independently sourced encoder.
  *
- * The original Linux binaries cannot be loaded by Android directly, so the
- * printer-specific PDL/transport behavior reconstructed from those binaries
- * is implemented here as a portable encoder.
+ * Canon-specific protocol reconstruction is intentionally not implemented
+ * here. The engine therefore fails closed and produces no printer data.
  */
 class CanonSfpUfr2Engine : Ufr2Engine {
-    private val encoder = Ufr2Encoder(Ufr2PrinterProfile.LBP6030B)
-
-    override val isAvailable: Boolean
-        get() = true
+    override val isAvailable: Boolean = false
 
     override fun encode(job: Ufr2Encoder.Job): Ufr2Encoder.Result =
-        encoder.encode(job)
+        Ufr2Encoder.Result(
+            success = false,
+            data = null,
+            message = "No independently sourced UFR II LT encoder is available; no printer data was generated."
+        )
 }
