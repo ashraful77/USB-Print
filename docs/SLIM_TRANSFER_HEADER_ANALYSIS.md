@@ -49,7 +49,7 @@ arg3 = 16-bit value from RDX
 arg4 = 16-bit value from RCX
 arg5 = 16-bit value from R8
 arg6 = low 16 bits of R9
-arg7 = transfer value from [RBP+0x10]
+arg7 = transfer length from [RBP+0x10]
 arg8 = raster-data pointer from [RBP+0x18]
 ```
 
@@ -83,95 +83,126 @@ or:
 
 Transport/context conditions can select `A4 <arg7:16>` or `A8 <arg7:32>`. A context flag can additionally add `E5 <context+0x0b> E4 <context+0x0c>`.
 
-The header is sent with `pdWrite(context, header, header_length)`, followed by the raster-data write using `arg8` and the transfer value.
+The header is sent with `pdWrite(context, header, header_length)`, followed by the raster-data write using `arg8` and the transfer length.
 
-## 3. Newly verified LBP6030 SLIM call-site arguments
+## 3. Verified LBP6030 SLIM raster call-site arguments
 
-Disassembly of `zbdlStartRaster()` around `0x10b9e-0x10db4` now resolves more of the call path.
-
-Before compression, Canon calls `lCaptCompEx()` with:
+Disassembly of `zbdlStartRaster()` resolves the transfer call as:
 
 ```text
-input          = current raster-band pointer
-output         = context[0xa8]
-lineBytes      = [rbp-0xd4]
-lineCount      = current band line count
-outputCapacity = [rbp-0x68]
-bitsPerPixel   = [rbp-0x54]
-encodedLines   = &([rbp-0xe8])
-compParam      = &([rbp-0xe0])
-copyMin        = 2
-unused         = NULL
+arg1 = context
+arg2 = encoded line count returned by lCaptCompEx()
+arg3 = transfer width/offset field
+arg4 = 0
+arg5 = current raster Y position
+arg6 = 3
+arg7 = compressed length + header/trailer adjustment
+arg8 = final SLIM raster buffer from slimCompressData()
 ```
 
-Immediately after compression, the transfer call is constructed as:
+For the normal monochrome path:
 
 ```text
-push [rbp-0x20]       ; arg8: compressed raster buffer
-push rdi              ; arg7: value loaded from context+0xa8
-r9d = 3               ; arg6
-r8d = [rbp-0x74]      ; arg5
-rcx = 0               ; arg4
-rdx = [rbp-0x90]      ; arg3
-rsi = [rbp-0xe8]      ; arg2 = encoded line count
-rdi = context         ; arg1
-call pdbdlTransferHalftoneImage
+arg3 = context+0x1c (low 16 bits)
+arg5 = context+0x24 (low 16 bits)
 ```
 
-The callee confirms that `[RBP+0x10]` is `arg7` and `[RBP+0x18]` is `arg8`.
+After each successful transfer, the Canon path advances `context+0x24` by the encoded line count.
 
-For the normal monochrome/non-digreg path, the sources of the two raster-position fields are now also explicit:
+The important correction is that **arg7 is not a buffer pointer**. The call-site loads the compressed result length from the local `[rbp-0xb4]`, adds `[rbp-0x50]`, and passes that numeric value as arg7. The two observed adjustments are:
 
 ```text
-arg3 = context[0x1c]   (low 16 bits)
-arg5 = context[0x24]   (low 16 bits, then advanced by encoded line count)
+normal band       + 0x0e
+special final band + 0x12
 ```
 
-The initial `arg5` is therefore the page/band Y position. After each successful transfer Canon performs:
+`arg8` is the pointer to the buffer produced by `slimCompressData()`.
+
+For a normal 256-line monochrome band, `arg2 = 256` when `lCaptCompEx()` accepts the complete band.
+
+For the 600-DPI A4 LBP6030 host reference, the transfer header contains `13 60` and `1B 68`, consistent with:
 
 ```text
-context[0x24] += encodedLineCount
+transfer width = 0x1360 = 4960
+page height    = 0x1B68 = 7016
 ```
 
-For the 600-DPI A4 LBP6030 host reference, the observed header contains `13 60` and `1B 68`, consistent with:
+This indicates that the Canon transfer layer uses a 4960-pixel padded width even though the rasterizer's nominal image width is 4958 pixels.
+
+## 4. Verified job-start record: `pdbdlBeginJob()`
+
+V5.10 x86-64 `pdbdlBeginJob @ 0x15097` constructs the job-start PDL record directly and sends it with `pdWrite()`.
+
+The fixed beginning is:
 
 ```text
-arg3 / transfer width = 0x1360 = 4960
-page height            = 0x1B68 = 7016
+01 C1 85
 ```
 
-This is strong evidence that the Canon transfer layer uses a 4960-pixel padded width even though the source 1-bit raster is 4958 pixels wide.
-
-For a normal 256-line band, `arg2` is the encoded line count returned by `lCaptCompEx`; a 256-line test therefore produces `arg2 = 256` when the compressor accepts the complete band.
-
-### Important unresolved point: `arg7`
-
-The call-site loads `context[0xa8]` into the seventh argument while the same compressed-buffer address is also used as the raster-data destination/input around the call. The callee subsequently treats `arg7` as the transfer length for `pdWrite()` and also uses `arg8` as the raster-data pointer. This needs one more layer of context-structure tracing before it can safely be reduced to a constant or copied into Android.
-
-Therefore **do not guess `arg7`** and do not send this header to the physical printer yet.
-
-## 4. Consequence for the Android encoder
-
-The current Android implementation uses a guessed structure resembling the real Canon function:
+Then it emits three 16-bit fields, selected from the context:
 
 ```text
-62 E3 85
-W
-lines
-E8 A5
-W
-lines
-E1 00
-D7
-84 payload_length
-9D payload_length
+field A
+field B
+field C
 ```
 
-This is only a research scaffold and is **not verified Canon output**. It must remain disabled for physical printing until the context-derived arguments, compressed raster record, and transport framing are reproduced.
+followed by:
 
-In particular, the Android encoder currently uses raw width `4958` in the raster header; the recovered Canon call-site evidence points toward a padded transfer width of `4960`.
+```text
+C2 00
+D8 84 <job-parameter:16>
+DD 80 C8
+F0 84 08 00
+```
 
-## 5. Verified LBP6030 monochrome compression parameters
+If the printer/device mode is `0x81`, it additionally appends:
+
+```text
+E9 84 01 90
+```
+
+The second 16-bit job parameter is the `pdbdlBeginJob()` second argument. The function ends by calling `pdWrite(context, buffer, length)`.
+
+This explains the observed host-only job header prefix and, importantly, establishes that the job header is generated by `pdbdlBeginJob()` rather than by the USB transport layer.
+
+## 5. Verified page-start record: `pdbdlBeginPage()`
+
+V5.10 x86-64 `pdbdlBeginPage @ 0x15593` constructs the page-start record and sends it with `pdWrite()`.
+
+For the normal non-digreg path, the two main page dimensions originate from:
+
+```text
+context+0x1c
+context+0x30
+```
+
+They are passed through `Rotation_Image()`, then emitted as:
+
+```text
+03
+E7 85 <rotated-width:16> <rotated-height:16>
+DE 80
+C8 <context+0x24 low byte>
+C8 <context+0x0c low byte>
+CA
+```
+
+Additional `A5`/`A1` records are conditional on digreg mode. When a page data list is enabled, the complete page-start record is retained in the internal list before being sent.
+
+For the ordinary LBP6030 monochrome case, the previously observed page-start bytes are therefore consistent with the real `pdbdlBeginPage()` construction rather than a guessed encoder format.
+
+## 6. End-of-job record
+
+`pdbdlEndJob()` constructs an 8-byte local buffer, initializes it to zero, sets the first byte to:
+
+```text
+11
+```
+
+and calls `pdWrite(context, buffer, 1)`. Thus the actual end-job marker written by this function is the single byte `11`.
+
+## 7. Verified LBP6030 monochrome compression parameters
 
 The target PPD supplies:
 
@@ -187,18 +218,21 @@ The corresponding Canon parameter structure begins:
 
 A direct host-side `lCaptCompEx()` test using this parameter set produced deterministic compressed output, including an 808-byte result for a blank 256-line band.
 
-## 6. Current research boundary
+## 8. Current research boundary
 
-The pipeline now has these independently mapped layers:
+The host-side PDL path is now mapped through the following layers:
 
 ```text
 1-bit raster
   -> lCaptCompEx()
-  -> slimCompressData() exact wrapper
-  -> pdbdlTransferHalftoneImage() exact call/field construction
+  -> slimCompressData()
+  -> pdbdlBeginJob()
+  -> pdbdlBeginPage()
+  -> pdbdlTransferHalftoneImage()
+  -> pdbdlEndPage()/pdbdlEndJob()
   -> pdWrite()
 ```
 
-The remaining blocker is recovering the exact `arg7`/context structure semantics and USB transport/framing state for the LBP6030B job, then reproducing a complete host-side reference record byte-for-byte.
+The remaining major blocker is the exact `pdWrite()`/device transport behavior and a complete byte-for-byte host reference stream for one fixed LBP6030B page. The Android project therefore remains fail-closed and must not send guessed data to the physical printer.
 
 No physical printer has been used for these experiments.
