@@ -83,36 +83,72 @@ or:
 
 Transport/context conditions can select `A4 <arg7:16>` or `A8 <arg7:32>`. A context flag can additionally add `E5 <context+0x0b> E4 <context+0x0c>`.
 
-The header is sent with `pdWrite(context, header, header_length)`, followed by the raster-data write.
+The header is sent with `pdWrite(context, header, header_length)`, followed by the raster-data write using `arg8` and the transfer value.
 
 ## 3. Newly verified LBP6030 SLIM call-site arguments
 
-Disassembly of `zbdlStartRaster()` around `0x10d9a-0x10db4` gives the actual call construction:
+Disassembly of `zbdlStartRaster()` around `0x10b9e-0x10db4` now resolves more of the call path.
+
+Before compression, Canon calls `lCaptCompEx()` with:
 
 ```text
-push [rbp-0x20]       ; arg8: raster-data pointer
-push rdi              ; arg7: context+0xa8 value loaded earlier
+input          = current raster-band pointer
+output         = context[0xa8]
+lineBytes      = [rbp-0xd4]
+lineCount      = current band line count
+outputCapacity = [rbp-0x68]
+bitsPerPixel   = [rbp-0x54]
+encodedLines   = &([rbp-0xe8])
+compParam      = &([rbp-0xe0])
+copyMin        = 2
+unused         = NULL
+```
+
+Immediately after compression, the transfer call is constructed as:
+
+```text
+push [rbp-0x20]       ; arg8: compressed raster buffer
+push rdi              ; arg7: value loaded from context+0xa8
 r9d = 3               ; arg6
 r8d = [rbp-0x74]      ; arg5
-ecx = 0                ; arg4
-rdx = [rbp-0x90]      ; arg3 source
-rsi = [rbp-0xe8]      ; arg2
+rcx = 0               ; arg4
+rdx = [rbp-0x90]      ; arg3
+rsi = [rbp-0xe8]      ; arg2 = encoded line count
 rdi = context         ; arg1
 call pdbdlTransferHalftoneImage
 ```
 
-The callee confirms that `[RBP+0x10]` is the transfer value (`arg7`) and `[RBP+0x18]` is the raster-data pointer (`arg8`). On this SLIM path the fourth register argument is explicitly zero, so `arg4 = 0`.
+The callee confirms that `[RBP+0x10]` is `arg7` and `[RBP+0x18]` is `arg8`.
 
-The important remaining values are therefore:
+For the normal monochrome/non-digreg path, the sources of the two raster-position fields are now also explicit:
 
 ```text
-context[0xa8] -> exact arg7 value
-[rbp-0xe8]     -> exact arg2 value
-[rbp-0x74]     -> exact arg5 value
-[rbp-0x90]     -> exact arg3 value
+arg3 = context[0x1c]   (low 16 bits)
+arg5 = context[0x24]   (low 16 bits, then advanced by encoded line count)
 ```
 
-The previously observed host-generated LBP6030 header contains `13 60` and `1B 68` as raster dimensions, consistent with a padded transfer width of `0x1360 = 4960` and height `0x1B68 = 7016`. This is a strong indication that the Canon transfer layer uses a 4960-pixel padded width even though the source 1-bit raster is 4958 pixels wide.
+The initial `arg5` is therefore the page/band Y position. After each successful transfer Canon performs:
+
+```text
+context[0x24] += encodedLineCount
+```
+
+For the 600-DPI A4 LBP6030 host reference, the observed header contains `13 60` and `1B 68`, consistent with:
+
+```text
+arg3 / transfer width = 0x1360 = 4960
+page height            = 0x1B68 = 7016
+```
+
+This is strong evidence that the Canon transfer layer uses a 4960-pixel padded width even though the source 1-bit raster is 4958 pixels wide.
+
+For a normal 256-line band, `arg2` is the encoded line count returned by `lCaptCompEx`; a 256-line test therefore produces `arg2 = 256` when the compressor accepts the complete band.
+
+### Important unresolved point: `arg7`
+
+The call-site loads `context[0xa8]` into the seventh argument while the same compressed-buffer address is also used as the raster-data destination/input around the call. The callee subsequently treats `arg7` as the transfer length for `pdWrite()` and also uses `arg8` as the raster-data pointer. This needs one more layer of context-structure tracing before it can safely be reduced to a constant or copied into Android.
+
+Therefore **do not guess `arg7`** and do not send this header to the physical printer yet.
 
 ## 4. Consequence for the Android encoder
 
@@ -131,7 +167,7 @@ D7
 9D payload_length
 ```
 
-This is only a research scaffold and is **not verified Canon output**. It must remain disabled for physical printing until the context-derived arguments, SLIM raster record, and transport framing are reproduced.
+This is only a research scaffold and is **not verified Canon output**. It must remain disabled for physical printing until the context-derived arguments, compressed raster record, and transport framing are reproduced.
 
 In particular, the Android encoder currently uses raw width `4958` in the raster header; the recovered Canon call-site evidence points toward a padded transfer width of `4960`.
 
@@ -163,6 +199,6 @@ The pipeline now has these independently mapped layers:
   -> pdWrite()
 ```
 
-The remaining blocker is recovering the exact context values and transport/framing state for the LBP6030B job, then reproducing a complete host-side reference record byte-for-byte.
+The remaining blocker is recovering the exact `arg7`/context structure semantics and USB transport/framing state for the LBP6030B job, then reproducing a complete host-side reference record byte-for-byte.
 
 No physical printer has been used for these experiments.
