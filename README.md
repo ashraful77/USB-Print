@@ -22,16 +22,22 @@ The app can:
 
 Initial testing target: Canon imageCLASS LBP6030B / LBP6030 family.
 
-Canon's Linux UFRII LT driver documentation identifies this family as UFRII LT. The model-specific profile in this project records the observed USB ID and the A4/600-dpi defaults needed by the print pipeline.
+Canon's Linux UFRII LT driver documentation identifies this family as UFRII LT. The model-specific profile in this project records the observed USB ID and the A4/600-dpi defaults used by the print pipeline.
 
 ## Print architecture
 
-`PDF -> monochrome raster -> UFR II LT encoder -> USB bulk transfer -> printer`
+`PDF -> monochrome raster -> encoder interface -> USB bulk transfer -> printer`
 
-The UFR II LT encoder is still the remaining component before a physical test page can be sent. The project does not bundle Canon's proprietary driver binaries.
+The UFR II LT encoder is currently **not implemented**. The project intentionally fails closed: it will not generate or send unverified printer protocol bytes.
 
-Open-source research shows that Canon's Linux driver family has separate SFP/LT components and that some UFR II LT components are GPL-licensed, while other driver components remain proprietary. We therefore keep the Android implementation modular and only integrate code whose license permits redistribution.
+No Canon proprietary binaries are bundled or reconstructed by the Android build.
+
+## Research boundary
+
+Earlier reverse-engineering experiments identified implementation details in Canon's Linux driver package. Those findings are retained as research notes only and are not used to generate printer output in the application.
+
+A future encoder may be integrated only when its implementation has a clear, redistributable source or an independently developed clean-room basis suitable for inclusion in this project.
 
 ## Next milestone
 
-Implement the verified UFR II LT/SFP encoding path for the LBP6030B, validate its page framing and raster compression, then send a controlled one-page test job over the already-working USB connection.
+Find a legitimately redistributable UFR II LT encoder implementation or a sufficiently documented public protocol specification. Then add deterministic offline tests before considering any physical printer test.
