@@ -36,78 +36,85 @@ BD 3C BC [BC or DC] 80
 
 The fourth trailer byte is `BC` when `(context + 0x64) & 0x04` is set, otherwise `DC`.
 
-## 2. `pdbdlTransferHalftoneImage()` header construction
+## 2. `pdbdlTransferHalftoneImage()` exact argument mapping
 
 V5.10 x86-64 symbol: `pdbdlTransferHalftoneImage @ 0x161ab`.
 
-The function clears a local 36-byte buffer and constructs a variable-length header beginning:
+The function uses eight arguments:
 
 ```text
-62 E3 85
+arg1 = context
+arg2 = 16-bit value from RSI
+arg3 = 16-bit value from RDX
+arg4 = 16-bit value from RCX
+arg5 = 16-bit value from R8
+arg6 = low 16 bits of R9
+arg7 = transfer value from [RBP+0x10]
+arg8 = raster-data pointer from [RBP+0x18]
 ```
 
-The first fields are:
+The header begins:
 
 ```text
 62 E3 85
-arg1: 16-bit
 arg2: 16-bit
-E8 A5
 arg3: 16-bit
+E8 A5
 arg4: 16-bit
+arg5: 16-bit
 E1
-arg5: low byte
+arg6: low byte
 D7
 ```
 
-`arg6` is then encoded in either 16-bit or 32-bit form:
+`arg7` is then encoded as either:
 
 ```text
-84 <arg6:16>
-9D <arg6:16>
+84 <arg7:16>
+9D <arg7:16>
 ```
 
 or:
 
 ```text
-88 <arg6:32>
-9E <arg6:32>
+88 <arg7:32>
+9E <arg7:32>
 ```
 
-Transport/context conditions can select the shorter variants:
+Transport/context conditions can select `A4 <arg7:16>` or `A8 <arg7:32>`. A context flag can additionally add `E5 <context+0x0b> E4 <context+0x0c>`.
+
+The header is sent with `pdWrite(context, header, header_length)`, followed by the raster-data write.
+
+## 3. Newly verified LBP6030 SLIM call-site arguments
+
+Disassembly of `zbdlStartRaster()` around `0x10d9a-0x10db4` gives the actual call construction:
 
 ```text
-A4 <arg6:16>
-A8 <arg6:32>
+push [rbp-0x20]       ; arg8: raster-data pointer
+push rdi              ; arg7: context+0xa8 value loaded earlier
+r9d = 3               ; arg6
+r8d = [rbp-0x74]      ; arg5
+ecx = 0                ; arg4
+rdx = [rbp-0x90]      ; arg3 source
+rsi = [rbp-0xe8]      ; arg2
+rdi = context         ; arg1
+call pdbdlTransferHalftoneImage
 ```
 
-Another context flag can add:
+The callee confirms that `[RBP+0x10]` is the transfer value (`arg7`) and `[RBP+0x18]` is the raster-data pointer (`arg8`). On this SLIM path the fourth register argument is explicitly zero, so `arg4 = 0`.
+
+The important remaining values are therefore:
 
 ```text
-E5 <context+0x0b> E4 <context+0x0c>
+context[0xa8] -> exact arg7 value
+[rbp-0xe8]     -> exact arg2 value
+[rbp-0x74]     -> exact arg5 value
+[rbp-0x90]     -> exact arg3 value
 ```
 
-The completed header is sent through `pdWrite()` before the raster payload.
+The previously observed host-generated LBP6030 header contains `13 60` and `1B 68` as raster dimensions, consistent with a padded transfer width of `0x1360 = 4960` and height `0x1B68 = 7016`. This is a strong indication that the Canon transfer layer uses a 4960-pixel padded width even though the source 1-bit raster is 4958 pixels wide.
 
-## 3. Important call-site result
-
-The SLIM raster path in `zbdlStartRaster()` calls `pdbdlTransferHalftoneImage()` around `0x10daf` with:
-
-```text
-arg3 = 0
-arg5 = 3
-```
-
-A separate transfer path around `0x10366` uses:
-
-```text
-arg3 = 0
-arg5 = 5
-```
-
-Therefore the raster header is context-dependent; it is not safe to assume that width, line count and compressed length alone determine every field.
-
-## 4. Consequence for `ufr2engine.cpp`
+## 4. Consequence for the Android encoder
 
 The current Android implementation uses a guessed structure resembling the real Canon function:
 
@@ -124,7 +131,9 @@ D7
 9D payload_length
 ```
 
-This is useful as a research scaffold but is **not verified Canon output**. It must remain disabled for physical printing until the six transfer arguments and surrounding job/raster context are recovered.
+This is only a research scaffold and is **not verified Canon output**. It must remain disabled for physical printing until the context-derived arguments, SLIM raster record, and transport framing are reproduced.
+
+In particular, the Android encoder currently uses raw width `4958` in the raster header; the recovered Canon call-site evidence points toward a padded transfer width of `4960`.
 
 ## 5. Verified LBP6030 monochrome compression parameters
 
@@ -144,14 +153,16 @@ A direct host-side `lCaptCompEx()` test using this parameter set produced determ
 
 ## 6. Current research boundary
 
-The pipeline now has two independently mapped layers:
+The pipeline now has these independently mapped layers:
 
 ```text
 1-bit raster
   -> lCaptCompEx()
   -> slimCompressData() exact wrapper
-  -> pdbdlTransferHalftoneImage() header construction
+  -> pdbdlTransferHalftoneImage() exact call/field construction
   -> pdWrite()
 ```
 
-The remaining blocker is recovering the exact raster-context arguments and transport/framing state for the LBP6030B job. No physical printer has been used for these experiments.
+The remaining blocker is recovering the exact context values and transport/framing state for the LBP6030B job, then reproducing a complete host-side reference record byte-for-byte.
+
+No physical printer has been used for these experiments.
