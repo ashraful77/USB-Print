@@ -1,6 +1,9 @@
 package com.usbprint.app
 
-/** Creates the native Canon LBP6030B UFR II LT/SFP engine. */
+/** Creates the fail-closed UFR II LT engine. */
 object Ufr2EngineFactory {
-    fun create(): Ufr2Engine = NativeUfr2Engine()
+    fun create(): Ufr2Engine = object : Ufr2Engine {
+        override val isAvailable = false
+        override fun encode(job: Ufr2Encoder.Job) = Ufr2Encoder().encode(job)
+    }
 }
