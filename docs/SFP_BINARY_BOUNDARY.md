@@ -1,10 +1,10 @@
-# SFP source / binary boundary
+# SFP / CPCA binary boundary
 
 ## 2026-09 investigation result
 
-The Canon UFRII LT 5.00 packaging for the LBP6030 family gives us a useful distinction between the **buildable source tree** and the **printer-stream runtime**.
+The Canon UFRII LT 5.00 packaging for the LBP6030 family gives us a useful distinction between the buildable source tree and the printer-stream runtime.
 
-Public packaging metadata for the Canon source archive shows these common modules being built from source:
+Public packaging metadata shows these common modules being built from source:
 
 - `backend`
 - `buftool`
@@ -19,7 +19,7 @@ The SFP-specific source tree builds:
 - `cpca`
 - `StatusMonitor`
 
-The same package is explicitly marked as mixed-license: GPL-2, MIT, and custom Canon terms. The packaging scripts also preserve module-specific license files, including a Canon license for `backend` and `cpca/cnpklib`. Therefore a source directory name alone is not enough to establish that its implementation can be copied into USB Print.
+The same package is explicitly mixed-license, with module-specific license files including a Canon license for `cpca/cnpklib`. Therefore a source directory name alone is not enough to establish that its implementation can be copied into USB Print.
 
 ## Critical finding
 
@@ -35,17 +35,23 @@ and
 
 `application/vnd.cups-command -> rastertosfp`
 
-This means the actual CUPS-to-printer stream boundary is the `rastertosfp` filter. Public packaging metadata places that filter in the binary driver package rather than proving that the Android-usable implementation is contained in the redistributable source modules.
+Public Linux logs independently confirm `rastertosfp` as the final CUPS filter before the USB backend. The available packaging evidence also shows that the filter is accompanied by Canon-specific runtime libraries.
 
-The current evidence therefore supports this architecture:
+The current evidence therefore supports:
 
 `PDF -> 1-bit raster -> SFP/CPCA encoding -> USB`
 
-with `rastertosfp` as the missing implementation boundary.
+with `rastertosfp` as the unresolved stream-emission boundary.
+
+## Do not substitute CAPT
+
+Open-source CAPT implementations were found, but public device lists classify LBP6030/LBP6030B/LBP6030w as UFR-II. CAPT implementations target different Canon protocol families. Therefore CAPT framing is not being treated as a drop-in replacement.
+
+This is important because a working open-source protocol for another Canon printer is useful research, but it is not evidence that those bytes are accepted by the LBP6030B.
 
 ## What we can safely use as research
 
-We can use public source trees, PPDs, package metadata, logs, and module documentation to determine:
+We can use public source trees, PPDs, package metadata, logs, module documentation, and externally observable behavior to determine:
 
 - filter names and data-flow order;
 - page/raster parameters;
@@ -68,22 +74,10 @@ A structurally plausible stream is not sufficient. Hardware transmission should 
 
 ## Next experiment
 
-The next useful experiment is **not** to guess protocol bytes.
+1. Trace the public CPCA source tree and module licenses.
+2. Determine whether any independently redistributable CPCA framing implementation exists.
+3. Separate generic compression from Canon-specific framing.
+4. Build deterministic vectors only from independently sourced behavior.
+5. Keep the Android encoder fail-closed until those vectors are available.
 
-Instead:
-
-1. obtain the exact Canon LBP6030 driver package/source in a legally usable research environment;
-2. inspect the module-specific README/license files;
-3. trace the build/link relationship between `rasterfilter`, `cpca`, and `rastertosfp`;
-4. identify which component actually emits the printer stream;
-5. record only externally observable format facts;
-6. search for an independently licensed implementation of those facts;
-7. add deterministic golden vectors before enabling USB output.
-
-## Current conclusion
-
-The research has moved the blocker from “unknown UFR II protocol” to a much narrower question:
-
-**Can the LBP6030 SFP stream encoder be implemented from independently usable material, or is the required byte-generation logic confined to Canon-restricted runtime code?**
-
-Until that question is answered, USB Print should keep `Ufr2Encoder` fail-closed.
+No Canon binary or guessed printer bytes are being added to the application.
