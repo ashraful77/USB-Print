@@ -14,6 +14,12 @@ A 2025 LBP6030w Linux/ARM investigation provides an important negative result: t
 
 The same logs show CUPS launching `rastertosfp` before the USB backend and identify the printer as `CA_UFRIILT_OIP;CMD:LIPSLX,CPCA`. This reinforces that `rastertosfp` is the critical conversion boundary, while leaving its complete runtime dependencies and emitted stream semantics unresolved.
 
+## Dependency-tracing result
+
+Public packaging metadata gives a stronger boundary clue. The Gentoo packaging for Canon's UFR II LT driver explicitly treats `rastertosfp` as a packaged binary and lists runtime components including `libufr2filter.so.1.0.0`, `libEnoJBIG.so.1.0.0`, `libEnoJPEG.so.1.0.0`, `libcnlbcm.so.1.0`, and `libcaiocnpkbidi.so.1.0.0`. This means the filter should not be treated as a self-contained, redistributable encoder merely because a public package can install it.
+
+A search of the USB-Print repository found no existing `rastertosfp` or `libufr2filter` implementation. A broader public-code search likewise found packaging metadata rather than an independent SFP encoder.
+
 ## Engineering decision
 
 Keep the encoder fail-closed.
